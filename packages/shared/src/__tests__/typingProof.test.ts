@@ -342,10 +342,13 @@ describe('TypingProof', () => {
 
     it('should record human attestation as event #0', async () => {
       const attestation = {
+        verified: true,
         score: 0.9,
         action: 'create_file',
-        token: 'mock-token',
-        timestamp: Date.now(),
+        timestamp: new Date().toISOString(),
+        hostname: 'localhost',
+        signature: 'mock-signature',
+        success: true,
       };
 
       const result = await proof.recordHumanAttestation(attestation);
@@ -359,10 +362,13 @@ describe('TypingProof', () => {
       await proof.recordEvent({ type: 'contentChange', data: 'x' });
 
       const attestation = {
+        verified: true,
         score: 0.9,
         action: 'create_file',
-        token: 'mock-token',
-        timestamp: Date.now(),
+        timestamp: new Date().toISOString(),
+        hostname: 'localhost',
+        signature: 'mock-signature',
+        success: true,
       };
 
       await expect(proof.recordHumanAttestation(attestation)).rejects.toThrow(
@@ -385,10 +391,13 @@ describe('TypingProof', () => {
 
     it('should return true when first event is humanAttestation', async () => {
       await proof.recordHumanAttestation({
+        verified: true,
         score: 0.9,
         action: 'test',
-        token: 'token',
-        timestamp: Date.now(),
+        timestamp: new Date().toISOString(),
+        hostname: 'localhost',
+        signature: 'mock-signature',
+        success: true,
       });
 
       expect(proof.hasHumanAttestation()).toBe(true);
@@ -471,7 +480,10 @@ describe('TypingProof', () => {
 
     it('should update stats after events', async () => {
       await proof.recordEvent({ type: 'contentChange', data: 'a' });
-      await proof.recordEvent({ type: 'keyDown', data: { key: 'a' } });
+      await proof.recordEvent({
+        type: 'keyDown',
+        data: { key: 'a', code: 'KeyA', modifiers: { shift: false, ctrl: false, alt: false, meta: false } },
+      });
 
       const stats = proof.getStats();
       expect(stats.totalEvents).toBe(2);
