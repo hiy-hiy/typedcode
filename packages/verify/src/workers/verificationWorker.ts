@@ -190,7 +190,10 @@ async function verify(request: VerifyRequest): Promise<void> {
         proofData.content ?? ''
       );
 
-      const rootVerification = await verifyInitialHashRoot(proofData);
+      // 上の guard で typingProofData は defined だが、TS は narrowing できないので
+      // 明示的に narrowed 型として渡す。
+      const narrowedProof = proofData as unknown as ExportedProof;
+      const rootVerification = await verifyInitialHashRoot(narrowedProof);
       const eventMetadataVerification = verifyProofMetadata(
         proofData.typingProofData,
         proofData.proof?.events ?? []
@@ -232,7 +235,7 @@ async function verify(request: VerifyRequest): Promise<void> {
 
     sendProgress(id, 3, 3, 'complete', totalEvents);
     const finalHashVerification = chainVerification.valid
-      ? verifyFinalChainHash(proofData, chainVerification.computedHash)
+      ? verifyFinalChainHash(proofData as unknown as ExportedProof, chainVerification.computedHash)
       : { valid: false, reason: chainVerification.message };
     const contentVerification = verifyContentReplay(
       proofData.proof.events,
@@ -244,9 +247,8 @@ async function verify(request: VerifyRequest): Promise<void> {
     // 上の metadata guard で typingProofData は defined 済み
     let signedCheckpointResult: SignedCheckpointsVerificationResult | undefined;
     try {
-      signedCheckpointResult = await verifyProofSignedCheckpoints(
-        proofData as unknown as ExportedProof
-      );
+      const narrowedForSigned = proofData as unknown as ExportedProof;
+      signedCheckpointResult = await verifyProofSignedCheckpoints(narrowedForSigned);
     } catch (err) {
       // signed checkpoint 検証中の例外で全体を落とさない (registry / 鍵 import 失敗等)
       signedCheckpointResult = {

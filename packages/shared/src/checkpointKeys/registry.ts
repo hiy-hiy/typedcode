@@ -32,17 +32,22 @@ export interface CheckpointPublicKey {
 /**
  * 公開鍵レジストリ (append-only)
  *
- * 本番運用前のプレースホルダ。実鍵が発行されたら追記する。
- * テストでは fixture から動的に追加するため、初期状態は空配列。
+ * 鍵は revoke しても削除しない (`status: 'revoked'` で残す)。
+ * 鍵は `npm run gen-checkpoint-key -w @typedcode/workers` で生成し、
+ * 出力された公開鍵エントリをここに append し、秘密鍵を Cloudflare secret
+ * (本番) または packages/workers/.dev.vars (ローカル) に投入する。
+ *
+ * セキュリティ上、dev 用鍵もここに hardcode 同梱しない。各開発者がローカルで
+ * 鍵ペアを生成してこの配列に append する運用とする。
  */
 export const CHECKPOINT_PUBLIC_KEYS: readonly CheckpointPublicKey[] = [
-  // 例 (実装時の参考):
+  // 例 (gen-checkpoint-key の出力をそのまま貼る):
   // {
-  //   keyId: 'tcp-2026-01',
+  //   keyId: 'tcp-2026-08-xxxxxx',
   //   algorithm: 'ECDSA-P256',
   //   publicKeyJwk: { kty: 'EC', crv: 'P-256', x: '...', y: '...' },
   //   status: 'active',
-  //   validFrom: '2026-01-01T00:00:00Z',
+  //   validFrom: '2026-08-01T00:00:00Z',
   // },
 ] as const;
 

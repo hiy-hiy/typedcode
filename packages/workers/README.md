@@ -7,6 +7,7 @@ Cloudflare Workers API for TypedCode - Turnstile human verification and attestat
 - **Turnstile Verification**: Validate Cloudflare Turnstile tokens
 - **Attestation Signing**: HMAC-SHA256 signed attestations
 - **Attestation Verification**: Verify signed attestation integrity
+- **Signed Checkpoint Service**: ECDSA-P256 timestamped signatures for proof checkpoints, with KV-backed per-session `firstSeenAt`
 - **CORS Support**: Configurable CORS for editor and verify apps
 
 ## Setup
@@ -29,7 +30,32 @@ TURNSTILE_SECRET_KEY=your_secret_key_here
 ATTESTATION_SECRET_KEY=any_random_string_for_signing
 ```
 
-### 3. Start Development Server
+### 3. Generate Signed Checkpoint Key (one-time)
+
+```bash
+npm run gen-checkpoint-key -w @typedcode/workers
+```
+
+This prints:
+- A ready-to-paste public key entry. Append it to
+  `packages/shared/src/checkpointKeys/registry.ts`.
+- The matching `CHECKPOINT_SIGNING_KEY_ID` and `CHECKPOINT_SIGNING_KEY_JWK`.
+  Paste both into `.dev.vars`.
+
+Without these values the `/api/checkpoint/sign` endpoint returns
+`SIGNING_KEY_NOT_CONFIGURED` (500). The rest of the API still works.
+
+### 4. Create KV Namespace (one-time)
+
+```bash
+wrangler kv namespace create CHECKPOINT_SESSIONS
+wrangler kv namespace create CHECKPOINT_SESSIONS --preview
+```
+
+Replace the two `REPLACE_WITH_*_ID` placeholders in `wrangler.toml` with
+the IDs the command prints.
+
+### 5. Start Development Server
 
 ```bash
 npm run dev  # http://localhost:8787
@@ -100,6 +126,57 @@ Verify signed attestation integrity.
 }
 ```
 
+### POST `/api/checkpoint/sign`
+
+Sign an unsigned checkpoint payload from the editor with the server's
+ECDSA-P256 key and an authoritative `serverTimestamp` / `firstSeenAt`.
+
+**Request body** (see `SignedCheckpointInput` in `@typedcode/shared`):
+```json
+{
+  "sessionId": "...",
+  "tabId": "...",
+  "checkpointIndex": 0,
+  "eventIndex": 32,
+  "initialEventChainHash": "...",
+  "chainHash": "...",
+  "contentHash": "...",
+  "previousSignedCheckpointHash": null,
+  "totalEventsSincePrevious": 33,
+  "clientTimestamp": "2026-05-28T12:00:00.000Z"
+}
+```
+
+**Response (success):**
+```json
+{ "envelope": { "payload": { ... }, "signature": "...", "keyId": "...", "algorithm": "ECDSA-P256" } }
+```
+
+**Error codes**: `SCHEMA_INVALID` (400), `NON_MONOTONIC` (409),
+`SESSION_LIMIT_EXCEEDED` (429), `SIGNING_KEY_NOT_CONFIGURED` /
+`SIGNING_KEY_UNKNOWN` / `SIGNING_ERROR` (500).
+
+### GET `/api/checkpoint/public-keys`
+
+Returns the git-managed registry of public keys for offline / cached
+signature verification.
+
+**Response:**
+```json
+{
+  "keys": [
+    {
+      "keyId": "...",
+      "algorithm": "ECDSA-P256",
+      "publicKeyJwk": { "kty": "EC", "crv": "P-256", "x": "...", "y": "..." },
+      "status": "active",
+      "validFrom": "..."
+    }
+  ],
+  "cacheTtlSec": 86400
+}
+```
+
 ### GET `/health`
 
 Health check endpoint.
@@ -148,6 +225,8 @@ npm run deploy:prod  # Deploy to production environment
 ```bash
 wrangler secret put TURNSTILE_SECRET_KEY
 wrangler secret put ATTESTATION_SECRET_KEY
+wrangler secret put CHECKPOINT_SIGNING_KEY_ID
+wrangler secret put CHECKPOINT_SIGNING_KEY_JWK
 ```
 
 ## Configuration
@@ -186,7 +265,15 @@ src/
 |----------|-------------|----------|
 | `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile secret | Yes |
 | `ATTESTATION_SECRET_KEY` | HMAC signing key | Yes |
+| `CHECKPOINT_SIGNING_KEY_ID` | keyId for signed checkpoints (must exist in `CHECKPOINT_PUBLIC_KEYS` registry) | For `/api/checkpoint/sign` |
+| `CHECKPOINT_SIGNING_KEY_JWK` | ECDSA-P256 private key JWK as a JSON string | For `/api/checkpoint/sign` |
 | `ENVIRONMENT` | Environment name | No |
+
+## KV Namespaces
+
+| Binding | Purpose | TTL |
+|---------|---------|-----|
+| `CHECKPOINT_SESSIONS` | Per-session `firstSeenAt`, `lastCheckpointIndex`, `lastServerTimestamp`, `signedCount` (best-effort anti-replay; not required for verification) | 7 days |
 
 ## Dependencies
 
