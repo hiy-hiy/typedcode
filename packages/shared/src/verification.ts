@@ -23,6 +23,11 @@ export {
 
 import { deterministicStringify, computeHash } from './utils/hashUtils.js';
 import { POSW_ITERATIONS } from './version.js';
+import {
+  verifyProofSignedCheckpoints,
+} from './signedCheckpoints.js';
+import type { SignedCheckpointsVerificationResult } from './types.js';
+import type { CheckpointPublicKey } from './checkpointKeys/index.js';
 
 /**
  * Proof file with content (extends ExportedProof)
@@ -46,6 +51,22 @@ export interface FullVerificationResult {
   isPureTyping: boolean;
   errorAt?: number;
   errorMessage?: string;
+  poswSkipped?: boolean;
+  signedCheckpoints?: SignedCheckpointsVerificationResult;
+}
+
+/**
+ * 検証モード。
+ * - fast: PoSW 再計算をスキップ。chain integrity / content replay / metadata / signed checkpoint は実施
+ * - audit: fast + 決定的 PoSW サンプリング (現実装は full と同等のプレースホルダ)
+ * - full: 全 PoSW 再計算を含む完全検証
+ */
+export type VerificationMode = 'fast' | 'audit' | 'full';
+
+export interface VerifyProofFileOptions {
+  mode?: VerificationMode;
+  /** 公開鍵レジストリ (テスト/CLI から注入) */
+  signedCheckpointKeyRegistry?: readonly CheckpointPublicKey[];
 }
 
 /**
@@ -484,10 +505,14 @@ export async function verifyTypingProofHash(
 
 /**
  * Verify hash chain with PoSW
+ *
+ * `options.skipPosw: true` で PoSW 反復再計算をスキップする。
+ * iterations 値の整合性チェックと hash 連鎖検証は引き続き行う。
  */
 export async function verifyChain(
   events: StoredEvent[],
-  onProgress?: VerificationProgressCallback
+  onProgress?: VerificationProgressCallback,
+  options: { skipPosw?: boolean } = {}
 ): Promise<VerificationResult> {
   let hash = events[0]?.previousHash ?? null;
   let lastTimestamp = -Infinity;
@@ -551,16 +576,18 @@ export async function verifyChain(
       };
     }
 
-    const eventDataStringForPoSW = deterministicStringify(eventDataWithoutPoSW);
-    const poswValid = await verifyPoSW(hash ?? '', eventDataStringForPoSW, event.posw);
+    if (!options.skipPosw) {
+      const eventDataStringForPoSW = deterministicStringify(eventDataWithoutPoSW);
+      const poswValid = await verifyPoSW(hash ?? '', eventDataStringForPoSW, event.posw);
 
-    if (!poswValid) {
-      return {
-        valid: false,
-        errorAt: i,
-        message: `PoSW verification failed at event ${i}`,
-        event,
-      };
+      if (!poswValid) {
+        return {
+          valid: false,
+          errorAt: i,
+          message: `PoSW verification failed at event ${i}`,
+          event,
+        };
+      }
     }
 
     // Hash verification
@@ -593,18 +620,32 @@ export async function verifyChain(
 
   return {
     valid: true,
-    message: 'All hashes verified successfully',
+    message: options.skipPosw
+      ? 'All hashes verified successfully (PoSW skipped)'
+      : 'All hashes verified successfully',
     computedHash: hash ?? undefined,
   };
 }
 
 /**
  * Verify a complete proof file
+ *
+ * `options.mode`:
+ * - 'fast'  → PoSW 再計算をスキップ。chain/content/metadata/signed checkpoint は実施
+ * - 'audit' → 現状は 'full' と同等 (将来: 決定的 PoSW サンプリングを追加)
+ * - 'full'  → デフォルト。全 PoSW を再計算
+ *
+ * 注: 'fast' モードでも、PoSW の **正しさ** だけは保証されないが、proof の
+ *     tamper resistance (event 改ざん / reorder / 内容書き換え) は完全に検出される。
+ *     signed checkpoint があれば、サーバ署名による temporal anchoring も検証される。
  */
 export async function verifyProofFile(
   proof: ProofFile,
-  onProgress?: VerificationProgressCallback
+  onProgress?: VerificationProgressCallback,
+  options: VerifyProofFileOptions = {}
 ): Promise<FullVerificationResult> {
+  const mode = options.mode ?? 'full';
+  const skipPosw = mode === 'fast';
   const events = proof.proof.events;
 
   // 1. Verify metadata
@@ -634,8 +675,8 @@ export async function verifyProofFile(
     metadataError = 'Typing proof metadata is missing';
   }
 
-  // 2. Verify hash chain
-  const chainResult = await verifyChain(events, onProgress);
+  // 2. Verify hash chain (PoSW skipped in fast mode)
+  const chainResult = await verifyChain(events, onProgress, { skipPosw });
   const finalHashResult = chainResult.valid
     ? verifyFinalChainHash(proof, chainResult.computedHash)
     : { valid: false, reason: chainResult.message };
@@ -644,6 +685,12 @@ export async function verifyProofFile(
     ? verifyContentReplay(events, proof.content)
     : { valid: false, reason: 'Final content is missing' };
   const chainValid = chainResult.valid && finalHashResult.valid && checkpointResult.valid && contentResult.valid;
+
+  // 3. Verify signed checkpoints (mode independent; only affects "anchored" axis)
+  const signedCheckpointResult = await verifyProofSignedCheckpoints(proof, {
+    registry: options.signedCheckpointKeyRegistry,
+  });
+
   const verificationError = !metadataValid
     ? metadataError
     : !chainResult.valid
@@ -654,10 +701,16 @@ export async function verifyProofFile(
           ? checkpointResult.reason
           : !contentResult.valid
             ? contentResult.reason
-            : chainResult.message;
+            : signedCheckpointResult.anchored && !signedCheckpointResult.valid
+              ? signedCheckpointResult.reason
+              : chainResult.message;
+
+  // signed checkpoint が存在しつつ無効なら全体も無効。存在しない (anchored=false) のは
+  // 「補助情報が無い」だけで、tamper resistance は他レイヤで担保される。
+  const signedCheckpointBlocks = signedCheckpointResult.anchored && !signedCheckpointResult.valid;
 
   return {
-    valid: metadataValid && chainValid,
+    valid: metadataValid && chainValid && !signedCheckpointBlocks,
     metadataValid,
     rootValid,
     chainValid,
@@ -665,8 +718,10 @@ export async function verifyProofFile(
     contentValid: contentResult.valid,
     checkpointValid: checkpointResult.valid,
     isPureTyping,
-    errorAt: chainResult.errorAt ?? checkpointResult.errorAt,
+    errorAt: chainResult.errorAt ?? checkpointResult.errorAt ?? signedCheckpointResult.errorAt,
     errorMessage: verificationError,
+    poswSkipped: skipPosw,
+    signedCheckpoints: signedCheckpointResult,
   };
 }
 

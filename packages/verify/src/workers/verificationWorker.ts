@@ -10,13 +10,23 @@ import {
   verifyFinalChainHash,
   verifyInitialHashRoot,
   verifyProofMetadata,
+  verifyProofSignedCheckpoints,
 } from '@typedcode/shared';
-import type { StoredEvent, CheckpointData, ProofData, FingerprintComponents } from '@typedcode/shared';
+import type {
+  StoredEvent,
+  CheckpointData,
+  ProofData,
+  FingerprintComponents,
+  SignedCheckpointsVerificationResult,
+  ExportedProof,
+} from '@typedcode/shared';
+import type { VerificationMode, PoswMode, VerificationResultData } from '../types.js';
 
 // Worker内で使用するメッセージ型
 interface VerifyRequest {
   type: 'verify';
   id: string;
+  mode?: VerificationMode;
   proofData: {
     version?: string;
     typingProofHash?: string;
@@ -48,37 +58,7 @@ interface ProgressResponse {
 interface ResultResponse {
   type: 'result';
   id: string;
-  result: {
-    metadataValid: boolean;
-    rootValid?: boolean;
-    chainValid: boolean;
-    finalHashValid?: boolean;
-    contentValid?: boolean;
-    checkpointValid?: boolean;
-    isPureTyping: boolean;
-    message?: string;
-    errorAt?: number;
-    totalEvents?: number;
-    poswStats?: {
-      count: number;
-      avgTimeMs: number;
-      totalTimeMs: number;
-      iterations: number;
-    };
-    sampledResult?: {
-      sampledSegments: Array<{
-        startIndex: number;
-        endIndex: number;
-        eventCount: number;
-        startHash: string;
-        endHash: string;
-        verified: boolean;
-      }>;
-      totalSegments: number;
-      totalEventsVerified: number;
-      totalEvents: number;
-    };
-  };
+  result: VerificationResultData;
 }
 
 interface ErrorResponse {
@@ -113,7 +93,7 @@ function sendProgress(
 /**
  * 結果メッセージを送信
  */
-function sendResult(id: string, result: ResultResponse['result']): void {
+function sendResult(id: string, result: VerificationResultData): void {
   const msg: ResultResponse = {
     type: 'result',
     id,
@@ -137,7 +117,7 @@ function sendError(id: string, error: string): void {
 /**
  * PoSW統計を計算
  */
-function calculatePoSWStats(events: StoredEvent[]): ResultResponse['result']['poswStats'] {
+function calculatePoSWStats(events: StoredEvent[]): VerificationResultData['poswStats'] {
   const eventsWithPoSW = events.filter(
     (event) => 'posw' in event && event.posw && typeof event.posw === 'object'
   );
@@ -167,11 +147,26 @@ function calculatePoSWStats(events: StoredEvent[]): ResultResponse['result']['po
   };
 }
 
+function poswModeFor(mode: VerificationMode): PoswMode {
+  switch (mode) {
+    case 'fast':
+      return 'skipped';
+    case 'audit':
+      // Phase 2 ではプレースホルダ (現状 full と同じ挙動)
+      return 'full';
+    case 'full':
+    default:
+      return 'full';
+  }
+}
+
 /**
  * 検証を実行
  */
 async function verify(request: VerifyRequest): Promise<void> {
   const { id, proofData } = request;
+  const mode: VerificationMode = request.mode ?? 'full';
+  const skipPosw = mode === 'fast';
 
   try {
     const typingProof = new TypingProof();
@@ -225,11 +220,14 @@ async function verify(request: VerifyRequest): Promise<void> {
     typingProof.events = proofData.proof.events;
     typingProof.currentHash = proofData.proof.finalHash;
 
-    // チェックポイントは未署名の補助情報なので、成功判定には常に全件検証を使う
+    // チェックポイントは未署名の補助情報なので、成功判定には常に全件検証を使う。
+    // fast モードでも sequence / timestamp / previousHash / hash 連鎖は完全検証する。
+    // skip するのは PoSW の反復再計算 (1 event あたり SHA-256 1 万回) のみ。
     const chainVerification = await typingProof.verify(
       (current: number, total: number, hashInfo?: { computed: string; expected: string; poswHash: string }) => {
         sendProgress(id, current, total, 'chain', totalEvents, hashInfo);
-      }
+      },
+      { skipPosw }
     );
 
     sendProgress(id, 3, 3, 'complete', totalEvents);
@@ -241,27 +239,54 @@ async function verify(request: VerifyRequest): Promise<void> {
       proofData.content ?? ''
     );
     const checkpointVerification = await verifyCheckpoints(proofData.proof.events, proofData.checkpoints);
+
+    // 3. Signed checkpoint 検証 (モード非依存)
+    // 上の metadata guard で typingProofData は defined 済み
+    let signedCheckpointResult: SignedCheckpointsVerificationResult | undefined;
+    try {
+      signedCheckpointResult = await verifyProofSignedCheckpoints(
+        proofData as unknown as ExportedProof
+      );
+    } catch (err) {
+      // signed checkpoint 検証中の例外で全体を落とさない (registry / 鍵 import 失敗等)
+      signedCheckpointResult = {
+        valid: false,
+        anchored: false,
+        details: [],
+        coverage: { signedCount: 0, lastSignedEventIndex: null, coverageRatio: 0 },
+        temporal: null,
+        reason: `Signed checkpoint verification threw: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    const signedCheckpointBlocks =
+      signedCheckpointResult.anchored && !signedCheckpointResult.valid;
+
     const chainValid =
       chainVerification.valid &&
       finalHashVerification.valid &&
       checkpointVerification.valid &&
-      contentVerification.valid;
+      contentVerification.valid &&
+      !signedCheckpointBlocks;
+
     const verificationMessage = !metadataValid
       ? metadataMessage
       : !chainVerification.valid
         ? chainVerification.message
         : !finalHashVerification.valid
-        ? finalHashVerification.reason
+          ? finalHashVerification.reason
           : !checkpointVerification.valid
             ? checkpointVerification.reason
             : !contentVerification.valid
               ? contentVerification.reason
-              : chainVerification.message;
+              : signedCheckpointBlocks
+                ? signedCheckpointResult.reason
+                : chainVerification.message;
 
-    // 3. PoSW統計を計算
+    // 4. PoSW統計を計算
     const poswStats = calculatePoSWStats(proofData.proof.events);
 
-    // 4. 結果を送信
+    // 5. 結果を送信
     sendResult(id, {
       metadataValid,
       rootValid,
@@ -271,9 +296,16 @@ async function verify(request: VerifyRequest): Promise<void> {
       checkpointValid: checkpointVerification.valid,
       isPureTyping,
       message: verificationMessage,
-      errorAt: chainVerification.errorAt ?? checkpointVerification.errorAt,
+      errorAt: chainVerification.errorAt ?? checkpointVerification.errorAt ?? signedCheckpointResult.errorAt,
       totalEvents,
       poswStats,
+      verificationMode: mode,
+      poswMode: poswModeFor(mode),
+      signedCheckpointValid: signedCheckpointResult.anchored ? signedCheckpointResult.valid : undefined,
+      signedCheckpointAnchored: signedCheckpointResult.anchored,
+      signedCheckpointCoverage: signedCheckpointResult.coverage,
+      signedCheckpointTemporal: signedCheckpointResult.temporal,
+      signedCheckpointReason: signedCheckpointResult.reason,
     });
   } catch (error) {
     sendError(id, error instanceof Error ? error.message : String(error));

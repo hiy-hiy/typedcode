@@ -33,6 +33,8 @@ export type {
   FullVerificationResult,
   VerificationProgressCallback,
   PoswStats,
+  VerificationMode,
+  VerifyProofFileOptions,
 } from './verification.js';
 
 // Signed checkpoints (long-term verifiability)

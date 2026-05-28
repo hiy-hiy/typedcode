@@ -33,7 +33,7 @@ import { PROOF_FORMAT_VERSION } from '../version.js';
 import { HashChainManager } from './HashChainManager.js';
 import { PoswManager } from './PoswManager.js';
 import { CheckpointManager } from './CheckpointManager.js';
-import { ChainVerifier } from './ChainVerifier.js';
+import { ChainVerifier, type ChainVerifyOptions } from './ChainVerifier.js';
 import { StatisticsCalculator } from './StatisticsCalculator.js';
 import { isAllowedInputType, isProhibitedInputType } from './InputTypeValidator.js';
 
@@ -539,11 +539,15 @@ export class TypingProof {
   }
 
   /**
-   * ハッシュ鎖を検証（PoSW検証含む）
+   * ハッシュ鎖を検証（デフォルトで PoSW 含む）
    * @param onProgress - 進捗コールバック (current, total, hashInfo?) => void
+   * @param options - 検証オプション (skipPosw 等)
    */
-  async verify(onProgress?: (current: number, total: number, hashInfo?: { computed: string; expected: string; poswHash: string }) => void): Promise<VerificationResult> {
-    return await this.chainVerifier.verify(this.events, onProgress);
+  async verify(
+    onProgress?: (current: number, total: number, hashInfo?: { computed: string; expected: string; poswHash: string }) => void,
+    options?: ChainVerifyOptions
+  ): Promise<VerificationResult> {
+    return await this.chainVerifier.verify(this.events, onProgress, options);
   }
 
   /**

@@ -171,6 +171,8 @@ export interface WorkerRequestMessage {
   type: 'verify';
   id: string;
   proofData: ProofFile;
+  /** 検証モード。省略時はサーバ側のデフォルト ('full') を使う */
+  mode?: VerificationMode;
 }
 
 /** Worker メッセージ: Worker→メインスレッド */
