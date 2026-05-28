@@ -40,6 +40,7 @@ export interface FullVerificationResult {
   chainValid: boolean;
   finalHashValid?: boolean;
   contentValid?: boolean;
+  checkpointValid?: boolean;
   isPureTyping: boolean;
   errorAt?: number;
   errorMessage?: string;
@@ -257,6 +258,72 @@ export function verifyFinalChainHash(
 }
 
 /**
+ * Verify that exported checkpoints match the fully verified event list.
+ * Checkpoints are not a substitute for full verification because they are
+ * exported with the proof and are not independently signed.
+ */
+export async function verifyCheckpoints(
+  events: StoredEvent[],
+  checkpoints?: ExportedProof['checkpoints']
+): Promise<{ valid: boolean; reason?: string; errorAt?: number }> {
+  if (!checkpoints || checkpoints.length === 0) {
+    return { valid: true };
+  }
+
+  let lastIndex = -1;
+  for (const checkpoint of checkpoints) {
+    if (!Number.isInteger(checkpoint.eventIndex) || checkpoint.eventIndex <= lastIndex) {
+      return {
+        valid: false,
+        reason: `Checkpoint index is invalid or unsorted at event ${checkpoint.eventIndex}`,
+        errorAt: checkpoint.eventIndex,
+      };
+    }
+
+    const event = events[checkpoint.eventIndex];
+    if (!event) {
+      return {
+        valid: false,
+        reason: `Checkpoint points to missing event ${checkpoint.eventIndex}`,
+        errorAt: checkpoint.eventIndex,
+      };
+    }
+
+    if (checkpoint.hash !== event.hash) {
+      return {
+        valid: false,
+        reason: `Checkpoint hash mismatch at event ${checkpoint.eventIndex}`,
+        errorAt: checkpoint.eventIndex,
+      };
+    }
+
+    if (checkpoint.timestamp !== event.timestamp) {
+      return {
+        valid: false,
+        reason: `Checkpoint timestamp mismatch at event ${checkpoint.eventIndex}`,
+        errorAt: checkpoint.eventIndex,
+      };
+    }
+
+    const expectedContentHash = event.data
+      ? await computeHash(typeof event.data === 'string' ? event.data : JSON.stringify(event.data))
+      : '';
+
+    if (checkpoint.contentHash !== expectedContentHash) {
+      return {
+        valid: false,
+        reason: `Checkpoint content hash mismatch at event ${checkpoint.eventIndex}`,
+        errorAt: checkpoint.eventIndex,
+      };
+    }
+
+    lastIndex = checkpoint.eventIndex;
+  }
+
+  return { valid: true };
+}
+
+/**
  * Verify PoSW (Proof of Sequential Work)
  */
 export async function verifyPoSW(
@@ -442,19 +509,22 @@ export async function verifyProofFile(
   const finalHashResult = chainResult.valid
     ? verifyFinalChainHash(proof, chainResult.computedHash)
     : { valid: false, reason: chainResult.message };
+  const checkpointResult = await verifyCheckpoints(events, proof.checkpoints);
   const contentResult = proof.content !== undefined && proof.content !== null
     ? verifyContentReplay(events, proof.content)
     : { valid: false, reason: 'Final content is missing' };
-  const chainValid = chainResult.valid && finalHashResult.valid && contentResult.valid;
+  const chainValid = chainResult.valid && finalHashResult.valid && checkpointResult.valid && contentResult.valid;
   const verificationError = !metadataValid
     ? metadataError
     : !chainResult.valid
       ? chainResult.message
       : !finalHashResult.valid
         ? finalHashResult.reason
-        : !contentResult.valid
-          ? contentResult.reason
-          : chainResult.message;
+        : !checkpointResult.valid
+          ? checkpointResult.reason
+          : !contentResult.valid
+            ? contentResult.reason
+            : chainResult.message;
 
   return {
     valid: metadataValid && chainValid,
@@ -463,8 +533,9 @@ export async function verifyProofFile(
     chainValid,
     finalHashValid: finalHashResult.valid,
     contentValid: contentResult.valid,
+    checkpointValid: checkpointResult.valid,
     isPureTyping,
-    errorAt: chainResult.errorAt,
+    errorAt: chainResult.errorAt ?? checkpointResult.errorAt,
     errorMessage: verificationError,
   };
 }

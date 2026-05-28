@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   TypingProof,
   computeHash,
+  verifyCheckpoints,
   verifyContentReplay,
   verifyFinalChainHash,
   verifyInitialHashRoot,
@@ -137,6 +138,32 @@ describe('verification utilities', () => {
     expect(verifyFinalChainHash(proof, 'final')).toMatchObject({
       valid: false,
       reason: 'Signature final hash does not match verified chain hash',
+    });
+  });
+
+  it('validates checkpoints against their referenced events', async () => {
+    const event = {
+      type: 'contentChange',
+      inputType: 'insertText',
+      data: 'a',
+      hash: 'event-hash',
+      timestamp: 12,
+    } as StoredEvent;
+    const contentHash = await computeHash('a');
+
+    await expect(
+      verifyCheckpoints([event], [
+        { eventIndex: 0, hash: 'event-hash', timestamp: 12, contentHash },
+      ])
+    ).resolves.toMatchObject({ valid: true });
+
+    await expect(
+      verifyCheckpoints([event], [
+        { eventIndex: 0, hash: 'tampered', timestamp: 12, contentHash },
+      ])
+    ).resolves.toMatchObject({
+      valid: false,
+      reason: 'Checkpoint hash mismatch at event 0',
     });
   });
 });

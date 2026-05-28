@@ -20,6 +20,7 @@ export {
   verifyInitialHashRoot,
   verifyFinalChainHash,
   verifyContentReplay,
+  verifyCheckpoints,
   verifyTypingProofHash,
   verifyChain,
   verifyProofFile,
