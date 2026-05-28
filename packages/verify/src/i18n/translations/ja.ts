@@ -19,6 +19,7 @@ export const ja: VerifyTranslationKeys = {
   settings: {
     language: '言語',
     about: 'バージョン情報',
+    verifyMode: '検証モード',
   },
 
   activityBar: {
@@ -73,12 +74,26 @@ export const ja: VerifyTranslationKeys = {
     screenshotsSomeInvalid: '⚠ ${invalid}/${total}枚が改ざんされている可能性',
     screenshotsCount: '${count}枚',
     posw: 'PoSW',
+    poswMode: 'モード',
+    poswSkipped: 'スキップ (fast)',
+    poswSampled: 'サンプリング (audit)',
+    poswFull: '完全検証 (full)',
+    poswNone: 'なし',
     iterations: '反復回数',
     totalTime: '合計時間',
     humanAttestation: '人間証明',
     createTime: '作成時',
     exportTime: 'エクスポート時',
     typingPattern: 'タイピングパターン',
+    anchoring: '時刻アンカー',
+    anchoringStatus: '状態',
+    anchoringCoverage: 'カバレッジ',
+    anchoringTemporal: '時間スパン比',
+    anchoringVerified: '✓ 検証済み',
+    anchoringInvalid: '✗ 無効',
+    anchoringUnavailable: '未アンカー',
+    anchoringNone: '署名なし',
+    anchoringPostHoc: '⚠ 後付け一括署名の疑い (server span / client span が極端に小さい)',
   },
 
   chain: {

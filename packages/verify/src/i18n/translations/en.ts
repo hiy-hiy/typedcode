@@ -19,6 +19,7 @@ export const en: VerifyTranslationKeys = {
   settings: {
     language: 'Language',
     about: 'About',
+    verifyMode: 'Verification Mode',
   },
 
   activityBar: {
@@ -73,12 +74,26 @@ export const en: VerifyTranslationKeys = {
     screenshotsSomeInvalid: '⚠ ${invalid}/${total} possibly tampered',
     screenshotsCount: '${count} screenshots',
     posw: 'PoSW',
+    poswMode: 'Mode',
+    poswSkipped: 'Skipped (fast)',
+    poswSampled: 'Sampled (audit)',
+    poswFull: 'Verified (full)',
+    poswNone: 'None',
     iterations: 'Iterations',
     totalTime: 'Total Time',
     humanAttestation: 'Human Attestation',
     createTime: 'Created',
     exportTime: 'Exported',
     typingPattern: 'Typing Pattern',
+    anchoring: 'Temporal Anchoring',
+    anchoringStatus: 'Status',
+    anchoringCoverage: 'Coverage',
+    anchoringTemporal: 'Span ratio',
+    anchoringVerified: '✓ Verified',
+    anchoringInvalid: '✗ Invalid',
+    anchoringUnavailable: 'Unavailable',
+    anchoringNone: 'No signed checkpoints',
+    anchoringPostHoc: '⚠ Post-hoc batch signing suspected (server span / client span unusually small)',
   },
 
   chain: {

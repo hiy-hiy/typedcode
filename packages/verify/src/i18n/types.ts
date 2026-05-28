@@ -26,6 +26,7 @@ export interface VerifyTranslationKeys {
   settings: {
     language: string;
     about: string;
+    verifyMode: string;
   };
 
   // Activity bar
@@ -85,12 +86,26 @@ export interface VerifyTranslationKeys {
     screenshotsSomeInvalid: string;
     screenshotsCount: string;
     posw: string;
+    poswMode: string;
+    poswSkipped: string;
+    poswSampled: string;
+    poswFull: string;
+    poswNone: string;
     iterations: string;
     totalTime: string;
     humanAttestation: string;
     createTime: string;
     exportTime: string;
     typingPattern: string;
+    anchoring: string;
+    anchoringStatus: string;
+    anchoringCoverage: string;
+    anchoringTemporal: string;
+    anchoringVerified: string;
+    anchoringInvalid: string;
+    anchoringUnavailable: string;
+    anchoringNone: string;
+    anchoringPostHoc: string;
   };
 
   // Chain panel

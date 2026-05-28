@@ -13,7 +13,10 @@ import type {
   DiffResult,
   ChainErrorDetails,
   SampledVerificationInfo,
+  VerificationMode,
+  PoswMode,
 } from '../types';
+import type { SignedCheckpointsVerificationResult } from '@typedcode/shared';
 import { escapeHtml, type TypingPatternAnalysis } from '@typedcode/shared';
 import { SyntaxHighlighter } from '../services/SyntaxHighlighter.js';
 import { TypingPatternCard } from './TypingPatternCard.js';
@@ -31,6 +34,18 @@ export interface ResultData {
   typingSpeed: string;
   trustResult?: TrustResult;
   typingPatternAnalysis?: TypingPatternAnalysis;
+  /** 検証モード (Phase 5) */
+  verificationMode?: VerificationMode;
+  /** PoSW の実行モード (skipped / sampled / full) */
+  poswMode?: PoswMode;
+  /** 時刻アンカー (signed checkpoint) の検証結果 */
+  signedCheckpoint?: {
+    anchored: boolean;
+    valid: boolean;
+    coverage: SignedCheckpointsVerificationResult['coverage'];
+    temporal: SignedCheckpointsVerificationResult['temporal'];
+    reason?: string;
+  };
 }
 
 export interface PlaintextData {
@@ -99,6 +114,20 @@ export class ResultPanel {
   private poswBadge: HTMLElement;
   private poswIterations: HTMLElement;
   private poswTotalTime: HTMLElement;
+  private poswMode: HTMLElement;
+  private poswModeRow: HTMLElement;
+
+  // Anchoring card (signed checkpoints)
+  private anchoringIcon: HTMLElement;
+  private anchoringBadge: HTMLElement;
+  private anchoringStatus: HTMLElement;
+  private anchoringCoverage: HTMLElement;
+  private anchoringTemporalRow: HTMLElement;
+  private anchoringTemporal: HTMLElement;
+  private anchoringWarningRow: HTMLElement;
+  private anchoringWarning: HTMLElement;
+  private anchoringReasonRow: HTMLElement;
+  private anchoringReason: HTMLElement;
 
   private attestationIcon: HTMLElement;
   private attestationBadge: HTMLElement;
@@ -198,6 +227,20 @@ export class ResultPanel {
     this.poswBadge = document.getElementById('posw-badge')!;
     this.poswIterations = document.getElementById('posw-iterations')!;
     this.poswTotalTime = document.getElementById('posw-total-time')!;
+    this.poswMode = document.getElementById('posw-mode')!;
+    this.poswModeRow = document.getElementById('posw-mode-row')!;
+
+    // Anchoring card
+    this.anchoringIcon = document.getElementById('anchoring-icon')!;
+    this.anchoringBadge = document.getElementById('anchoring-badge')!;
+    this.anchoringStatus = document.getElementById('anchoring-status')!;
+    this.anchoringCoverage = document.getElementById('anchoring-coverage')!;
+    this.anchoringTemporalRow = document.getElementById('anchoring-temporal-row')!;
+    this.anchoringTemporal = document.getElementById('anchoring-temporal')!;
+    this.anchoringWarningRow = document.getElementById('anchoring-warning-row')!;
+    this.anchoringWarning = document.getElementById('anchoring-warning')!;
+    this.anchoringReasonRow = document.getElementById('anchoring-reason-row')!;
+    this.anchoringReason = document.getElementById('anchoring-reason')!;
 
     // Attestation card
     this.cardAttestation = document.getElementById('card-attestation')!;
@@ -464,16 +507,39 @@ export class ResultPanel {
     // Chain segment visualization (show for sampled verification)
     this.renderChainSegmentViz(result.sampledVerification, eventCount, result.chainErrorDetails);
 
-    // PoSW card
+    // PoSW card with mode awareness
     const hasPoSW = poswStats && poswStats.totalIterations > 0;
+    const poswMode = data.poswMode ?? 'full';
+    const poswBadgeText = !hasPoSW
+      ? t('result.poswNone')
+      : poswMode === 'skipped'
+        ? t('result.poswSkipped')
+        : poswMode === 'sampled'
+          ? t('result.poswSampled')
+          : t('result.poswFull');
+    const poswStatus = !hasPoSW ? null : poswMode === 'skipped' ? 'warning' : 'success';
     this.renderCard(
       this.poswIcon,
       this.poswBadge,
-      hasPoSW ? true : null,
-      hasPoSW ? '有効' : 'なし'
+      hasPoSW ? poswStatus === 'success' : null,
+      poswBadgeText
     );
+    if (hasPoSW && poswMode === 'skipped') {
+      // skipped 時は警告色で表示
+      this.poswBadge.className = 'result-card-badge warning';
+      this.poswIcon.className = 'result-card-icon warning';
+    }
     this.poswIterations.textContent = hasPoSW ? poswStats.totalIterations.toLocaleString() : '-';
     this.poswTotalTime.textContent = hasPoSW ? `${Math.round(poswStats.totalTime)}ms` : '-';
+    if (data.poswMode) {
+      this.poswModeRow.style.display = 'flex';
+      this.poswMode.textContent = poswMode;
+    } else {
+      this.poswModeRow.style.display = 'none';
+    }
+
+    // Anchoring card (signed checkpoints)
+    this.renderAnchoringCard(data.signedCheckpoint);
 
     // Attestation card
     if (attestations && attestations.length > 0) {
@@ -547,6 +613,67 @@ export class ResultPanel {
     iconEl.className = `result-card-icon ${statusClass}`;
     badgeEl.className = `result-card-badge ${statusClass}`;
     badgeEl.textContent = badgeText;
+  }
+
+  /**
+   * Anchoring (signed checkpoints) カードを描画
+   * - anchored=false: badge は warning「未アンカー」
+   * - anchored && !valid: badge は error
+   * - anchored && valid: badge は success。post-hoc 警告は別行で表示
+   */
+  private renderAnchoringCard(sc: ResultData['signedCheckpoint']): void {
+    if (!sc || !sc.anchored) {
+      this.anchoringIcon.className = 'result-card-icon warning';
+      this.anchoringBadge.className = 'result-card-badge warning';
+      this.anchoringBadge.textContent = t('result.anchoringUnavailable');
+      this.anchoringStatus.textContent = t('result.anchoringNone');
+      this.anchoringCoverage.textContent = '-';
+      this.anchoringTemporalRow.style.display = 'none';
+      this.anchoringWarningRow.style.display = 'none';
+      this.anchoringReasonRow.style.display = 'none';
+      return;
+    }
+    if (!sc.valid) {
+      this.anchoringIcon.className = 'result-card-icon error';
+      this.anchoringBadge.className = 'result-card-badge error';
+      this.anchoringBadge.textContent = t('result.anchoringInvalid');
+      this.anchoringStatus.textContent = t('result.anchoringInvalid');
+      this.anchoringCoverage.textContent = `${sc.coverage.signedCount}`;
+      this.anchoringTemporalRow.style.display = 'none';
+      this.anchoringWarningRow.style.display = 'none';
+      if (sc.reason) {
+        this.anchoringReasonRow.style.display = 'flex';
+        this.anchoringReason.textContent = sc.reason;
+      } else {
+        this.anchoringReasonRow.style.display = 'none';
+      }
+      return;
+    }
+
+    this.anchoringIcon.className = 'result-card-icon success';
+    this.anchoringBadge.className = 'result-card-badge success';
+    this.anchoringBadge.textContent = t('result.anchoringVerified');
+    this.anchoringStatus.textContent = t('result.anchoringVerified');
+    const pct = (sc.coverage.coverageRatio * 100).toFixed(1);
+    this.anchoringCoverage.textContent = `${sc.coverage.signedCount} (${pct}%)`;
+    this.anchoringReasonRow.style.display = 'none';
+
+    if (sc.temporal) {
+      this.anchoringTemporalRow.style.display = 'flex';
+      const serverMin = Math.round(sc.temporal.serverSpanMs / 60000);
+      const clientMin = Math.round(sc.temporal.clientSpanMs / 60000);
+      const ratioStr = sc.temporal.ratio !== null ? sc.temporal.ratio.toFixed(2) : 'n/a';
+      this.anchoringTemporal.textContent = `${ratioStr} (server ${serverMin}min / client ${clientMin}min)`;
+      if (sc.temporal.postHocSuspected) {
+        this.anchoringWarningRow.style.display = 'flex';
+        this.anchoringWarning.textContent = t('result.anchoringPostHoc');
+      } else {
+        this.anchoringWarningRow.style.display = 'none';
+      }
+    } else {
+      this.anchoringTemporalRow.style.display = 'none';
+      this.anchoringWarningRow.style.display = 'none';
+    }
   }
 
   updateChartStats(stats: {
