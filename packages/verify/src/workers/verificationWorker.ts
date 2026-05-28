@@ -3,8 +3,8 @@
  * メインスレッドをブロックせずにハッシュ鎖とPoSWの検証を行う
  */
 
-import { TypingProof } from '@typedcode/shared';
-import type { StoredEvent, CheckpointData, ProofData } from '@typedcode/shared';
+import { TypingProof, verifyInitialHashRoot } from '@typedcode/shared';
+import type { StoredEvent, CheckpointData, ProofData, FingerprintComponents } from '@typedcode/shared';
 
 // Worker内で使用するメッセージ型
 interface VerifyRequest {
@@ -18,6 +18,10 @@ interface VerifyRequest {
     proof: {
       events: StoredEvent[];
       finalHash: string | null;
+    };
+    fingerprint: {
+      hash: string;
+      components: FingerprintComponents;
     };
     checkpoints?: CheckpointData[];
     language?: string;
@@ -39,6 +43,7 @@ interface ResultResponse {
   id: string;
   result: {
     metadataValid: boolean;
+    rootValid?: boolean;
     chainValid: boolean;
     isPureTyping: boolean;
     message?: string;
@@ -163,7 +168,9 @@ async function verify(request: VerifyRequest): Promise<void> {
 
     // 1. メタデータ整合性の検証
     let metadataValid = false;
+    let rootValid = false;
     let isPureTyping = false;
+    let metadataMessage: string | undefined;
 
     const totalEvents = proofData.proof?.events?.length ?? 0;
 
@@ -180,6 +187,13 @@ async function verify(request: VerifyRequest): Promise<void> {
 
       metadataValid = hashVerification.valid;
       isPureTyping = hashVerification.isPureTyping ?? false;
+
+      const rootVerification = await verifyInitialHashRoot(proofData);
+      rootValid = rootVerification.valid;
+      metadataValid = metadataValid && rootValid;
+      metadataMessage = hashVerification.valid
+        ? rootVerification.reason
+        : hashVerification.reason;
     } else {
       // メタデータがない場合はサポート対象外（v3.0.0以降が必要）
       sendError(id, 'サポートされていないフォーマット: メタデータがありません（v3.0.0以降が必要）');
@@ -226,9 +240,10 @@ async function verify(request: VerifyRequest): Promise<void> {
     // 4. 結果を送信
     sendResult(id, {
       metadataValid,
+      rootValid,
       chainValid: chainVerification.valid,
       isPureTyping,
-      message: chainVerification.message,
+      message: metadataValid ? chainVerification.message : metadataMessage,
       errorAt: chainVerification.errorAt,
       totalEvents,
       poswStats,

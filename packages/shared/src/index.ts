@@ -17,6 +17,7 @@ export {
   arrayBufferToHex,
   computeHash,
   verifyPoSW,
+  verifyInitialHashRoot,
   verifyTypingProofHash,
   verifyChain,
   verifyProofFile,

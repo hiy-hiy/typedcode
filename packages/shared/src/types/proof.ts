@@ -112,6 +112,10 @@ export interface ProofMetadata {
 /** 証明データ */
 export interface ProofData {
   finalContentHash: string;
+  /** fingerprint hash と組み合わせて initialEventChainHash を再計算するためのnonce */
+  initialHashNonce?: string;
+  /** イベント列の信頼根。イベントがある場合は event #0.previousHash と一致する */
+  initialEventChainHash?: string | null;
   finalEventChainHash: string;
   deviceId: string;
   metadata: ProofMetadata;

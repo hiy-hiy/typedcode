@@ -241,6 +241,7 @@ describe('TypingProof', () => {
       expect(proof.fingerprint).toBe('test-fingerprint-hash');
       expect(proof.fingerprintComponents).toEqual(mockComponents);
       expect(proof.currentHash).not.toBeNull();
+      expect(proof.initialHashNonce).toMatch(/^[0-9a-f]{64}$/);
     });
 
     it('should generate initial hash based on fingerprint', async () => {
@@ -555,12 +556,14 @@ describe('TypingProof', () => {
 
       expect(serialized.events).toHaveLength(1);
       expect(serialized.currentHash).toBe(proof.currentHash);
+      expect(serialized.initialHashNonce).toBe(proof.initialHashNonce);
 
       const newProof = new TypingProof();
       newProof.restoreState(serialized);
 
       expect(newProof.events).toHaveLength(1);
       expect(newProof.currentHash).toBe(serialized.currentHash);
+      expect(newProof.initialHashNonce).toBe(serialized.initialHashNonce);
     });
   });
 
@@ -582,6 +585,7 @@ describe('TypingProof', () => {
       expect(restored.initialized).toBe(true);
       expect(restored.events).toHaveLength(1);
       expect(restored.currentHash).toBe(serialized.currentHash);
+      expect(restored.initialHashNonce).toBe(serialized.initialHashNonce);
       expect(restored.fingerprint).toBe('test-fingerprint');
     });
   });

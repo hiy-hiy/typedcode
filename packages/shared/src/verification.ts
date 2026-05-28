@@ -35,6 +35,7 @@ export interface ProofFile extends ExportedProof {
 export interface FullVerificationResult {
   valid: boolean;
   metadataValid: boolean;
+  rootValid?: boolean;
   chainValid: boolean;
   isPureTyping: boolean;
   errorAt?: number;
@@ -59,6 +60,66 @@ export interface PoswStats {
  * Progress callback for verification
  */
 export type VerificationProgressCallback = (current: number, total: number) => void;
+
+/**
+ * Verify that the hash chain starts from the exported fingerprint and nonce.
+ */
+export async function verifyInitialHashRoot(
+  proof: Pick<ExportedProof, 'typingProofData' | 'proof' | 'fingerprint'>
+): Promise<{ valid: boolean; reason?: string; computedInitialHash?: string; expectedInitialHash?: string }> {
+  const fingerprintHash = proof.fingerprint?.hash;
+  const fingerprintComponents = proof.fingerprint?.components;
+  const proofData = proof.typingProofData;
+
+  if (!fingerprintHash || !fingerprintComponents) {
+    return { valid: false, reason: 'Fingerprint data is missing' };
+  }
+
+  if (proofData.deviceId !== fingerprintHash) {
+    return { valid: false, reason: 'Proof deviceId does not match fingerprint hash' };
+  }
+
+  const fingerprintHashCandidates = new Set<string>([
+    await computeHash(JSON.stringify(fingerprintComponents, null, 0)),
+    await computeHash(deterministicStringify(fingerprintComponents)),
+  ]);
+
+  if (!fingerprintHashCandidates.has(fingerprintHash)) {
+    return { valid: false, reason: 'Fingerprint components do not match fingerprint hash' };
+  }
+
+  const nonce = proofData.initialHashNonce;
+  if (!nonce || !/^[0-9a-f]{64}$/i.test(nonce)) {
+    return { valid: false, reason: 'Initial hash nonce is missing or invalid' };
+  }
+
+  const expectedInitialHash = proofData.initialEventChainHash;
+  if (!expectedInitialHash) {
+    return { valid: false, reason: 'Initial event chain hash is missing' };
+  }
+
+  const computedInitialHash = await computeHash(fingerprintHash + nonce);
+  if (computedInitialHash !== expectedInitialHash) {
+    return {
+      valid: false,
+      reason: 'Initial event chain hash does not match fingerprint and nonce',
+      computedInitialHash,
+      expectedInitialHash,
+    };
+  }
+
+  const rootUsedByEvents = proof.proof.events[0]?.previousHash ?? proof.proof.finalHash;
+  if (rootUsedByEvents !== expectedInitialHash) {
+    return {
+      valid: false,
+      reason: 'First event does not start from the declared initial chain hash',
+      computedInitialHash: rootUsedByEvents ?? undefined,
+      expectedInitialHash,
+    };
+  }
+
+  return { valid: true, computedInitialHash, expectedInitialHash };
+}
 
 /**
  * Verify PoSW (Proof of Sequential Work)
@@ -221,16 +282,23 @@ export async function verifyProofFile(
 
   // 1. Verify metadata
   let metadataValid = false;
+  let rootValid = false;
   let isPureTyping = false;
+  let metadataError: string | undefined;
 
-  if (proof.typingProofHash && proof.typingProofData && proof.content) {
+  if (proof.typingProofHash && proof.typingProofData && proof.content !== undefined && proof.content !== null) {
     const metaResult = await verifyTypingProofHash(
       proof.typingProofHash,
       proof.typingProofData,
       proof.content
     );
-    metadataValid = metaResult.valid;
+    const rootResult = await verifyInitialHashRoot(proof);
+    rootValid = rootResult.valid;
+    metadataValid = metaResult.valid && rootValid;
+    metadataError = metaResult.valid ? rootResult.reason : 'Typing proof hash does not match metadata';
     isPureTyping = metaResult.isPureTyping;
+  } else {
+    metadataError = 'Typing proof metadata is missing';
   }
 
   // 2. Verify hash chain
@@ -239,10 +307,11 @@ export async function verifyProofFile(
   return {
     valid: metadataValid && chainResult.valid,
     metadataValid,
+    rootValid,
     chainValid: chainResult.valid,
     isPureTyping,
     errorAt: chainResult.errorAt,
-    errorMessage: chainResult.message,
+    errorMessage: !metadataValid ? metadataError : chainResult.message,
   };
 }
 
