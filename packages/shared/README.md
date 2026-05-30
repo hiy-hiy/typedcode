@@ -252,7 +252,12 @@ export const PROOF_FORMAT_VERSION = '1.0.0';
 export const STORAGE_FORMAT_VERSION = 1;
 export const MIN_SUPPORTED_VERSION = '1.0.0';
 export const POSW_ITERATIONS = 10000;
-export const CHECKPOINT_INTERVAL = 33;
+
+// Hybrid checkpoint trigger (whichever fires first):
+export const DEFAULT_MAX_EVENTS_PER_CHECKPOINT = 100;       // N
+export const DEFAULT_MAX_CHECKPOINT_INTERVAL_MS = 10_000;   // T (ms)
+// `CheckpointManager.CHECKPOINT_INTERVAL` is preserved as a deprecated
+// alias of `DEFAULT_MAX_EVENTS_PER_CHECKPOINT`.
 ```
 
 ## i18n

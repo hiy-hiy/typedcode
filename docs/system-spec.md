@@ -190,7 +190,12 @@ intermediateHash = hash
 
 ### 4.5. チェックポイント (Checkpoint)
 
-33 イベント (`CHECKPOINT_INTERVAL = 33`) ごとに自動作成される構造。
+以下のいずれかが先に成立した時点で自動作成される構造 (ハイブリッドトリガ)。
+
+- 直前 cp から **100 イベント** が経過 (`DEFAULT_MAX_EVENTS_PER_CHECKPOINT`)
+- 直前 cp から **10 秒** が経過 (`DEFAULT_MAX_CHECKPOINT_INTERVAL_MS`)
+
+時間トリガは `recordEvent` の呼び出し時にのみ評価されるため、無入力中は新しい cp は作られない。最終 cp は `exportProof` 時に強制発火する。
 
 ```typescript
 interface CheckpointData {
@@ -202,7 +207,7 @@ interface CheckpointData {
 }
 ```
 
-エクスポート時にも最終 event 位置のチェックポイントが追加で生成される。非正規 (33 倍数以外) のチェックポイントは export 直前に削除 (`cleanupForExport`)。
+エクスポート時にも最終 event 位置のチェックポイントが追加で生成される。export 直前の `cleanupForExport` は同一 `eventIndex` の重複を除去するのみで、トリガ間隔に依存しない。
 
 **意義**:
 - 高速検証 (将来のサンプリング検証) の足場
@@ -537,7 +542,7 @@ typedcode-verify my-code.zip --mode audit    # 将来用 (現状 full と同等)
 | **event** | エディタ操作 1 つを表す最小単位。25 種類 |
 | **chain hash** | event.hash。previousHash + eventData の SHA-256 |
 | **PoSW** | Proof of Sequential Work。10000 回 SHA-256 反復 |
-| **checkpoint** | 33 event ごとの「中間スナップショット」 |
+| **checkpoint** | 直前 cp から 100 event か 10 秒のいずれかが先に到達した時点で作られる「中間スナップショット」 |
 | **signed checkpoint** | サーバが ECDSA-P256 で署名した checkpoint。temporal anchoring の本体 |
 | **envelope** | SignedCheckpointEnvelope。署名済み payload + 署名 + keyId |
 | **firstSeenAt** | サーバが initial に sessionId を見た時刻。KV 由来で不変 |
@@ -549,7 +554,8 @@ typedcode-verify my-code.zip --mode audit    # 将来用 (現状 full と同等)
 | 定数 | 値 | 場所 |
 |------|-----|------|
 | `POSW_ITERATIONS` | 10000 | `version.ts` |
-| `CHECKPOINT_INTERVAL` | 33 | `CheckpointManager.ts` |
+| `DEFAULT_MAX_EVENTS_PER_CHECKPOINT` | 100 | `CheckpointManager.ts` |
+| `DEFAULT_MAX_CHECKPOINT_INTERVAL_MS` | 10_000 | `CheckpointManager.ts` |
 | `SIGNED_CHECKPOINT_FORMAT_VERSION` | 1 | `version.ts` |
 | `SESSION_TTL_SECONDS` | 604800 (7日) | `workers/src/checkpoint.ts` |
 | `SESSION_MAX_CHECKPOINTS` | 50000 | `workers/src/checkpoint.ts` |
@@ -558,6 +564,8 @@ typedcode-verify my-code.zip --mode audit    # 将来用 (現状 full と同等)
 | `POST_HOC_MIN_CLIENT_SPAN_MS` | 600_000 | `signedCheckpoints.ts` |
 | `PROOF_FORMAT_VERSION` | '1.0.0' | `version.ts` |
 | `STORAGE_FORMAT_VERSION` | 1 | `version.ts` |
+
+注: `CheckpointManager.CHECKPOINT_INTERVAL` は `DEFAULT_MAX_EVENTS_PER_CHECKPOINT` の値を持つ deprecated エイリアスとして維持される。
 
 ---
 
