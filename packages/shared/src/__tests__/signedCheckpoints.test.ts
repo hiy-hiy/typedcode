@@ -17,6 +17,7 @@ import {
   TypingProof,
   computeHash,
   hashSignedCheckpointPayload,
+  isIdempotentSigningRetry,
   resolveCheckpointPublicKey,
   verifyCheckpointSignature,
   verifySignedCheckpoints,
@@ -26,6 +27,7 @@ import {
   type ExportedProof,
   type FingerprintComponents,
   type SignedCheckpointEnvelope,
+  type SignedCheckpointInput,
   type SignedCheckpointPayload,
   type StoredEvent,
 } from '../index.js';
@@ -618,5 +620,103 @@ describe('verifySignedCheckpoints', () => {
     });
     expect(result.valid).toBe(false);
     expect(result.reason).toMatch(/Unsupported signed checkpoint payload version/);
+  });
+});
+
+describe('isIdempotentSigningRetry', () => {
+  const baseInput: SignedCheckpointInput = {
+    sessionId: 'session-A',
+    tabId: 'tab-1',
+    checkpointIndex: 5,
+    eventIndex: 165,
+    initialEventChainHash: '00'.repeat(32),
+    chainHash: '11'.repeat(32),
+    contentHash: '22'.repeat(32),
+    previousSignedCheckpointHash: '33'.repeat(32),
+    totalEventsSincePrevious: 33,
+    clientTimestamp: '2026-05-30T05:35:16.702Z',
+  };
+  const cachedPayload: SignedCheckpointPayload = {
+    version: SIGNED_CHECKPOINT_FORMAT_VERSION,
+    sessionId: 'session-A',
+    tabId: 'tab-1',
+    checkpointIndex: 5,
+    eventIndex: 165,
+    initialEventChainHash: '00'.repeat(32),
+    chainHash: '11'.repeat(32),
+    contentHash: '22'.repeat(32),
+    previousSignedCheckpointHash: '33'.repeat(32),
+    totalEventsSincePrevious: 33,
+    poswIterations: POSW_ITERATIONS,
+    clientTimestamp: '2026-05-30T05:35:16.702Z',
+    serverTimestamp: '2026-05-30T05:35:16.785Z',
+    firstSeenAt: '2026-05-30T05:35:12.750Z',
+  };
+
+  it('returns true when content fields match exactly', () => {
+    expect(isIdempotentSigningRetry(baseInput, cachedPayload)).toBe(true);
+  });
+
+  it('returns true when only clientTimestamp differs (reload-retry case)', () => {
+    // ページリロード後にセッション復元で同じ checkpoint が違う clientTimestamp で
+    // 再エンキューされても、論理的に同一なので冪等扱いにする。
+    const input = { ...baseInput, clientTimestamp: '2026-05-30T07:00:00.000Z' };
+    expect(isIdempotentSigningRetry(input, cachedPayload)).toBe(true);
+  });
+
+  it('returns false when chainHash differs', () => {
+    const input = { ...baseInput, chainHash: 'ff'.repeat(32) };
+    expect(isIdempotentSigningRetry(input, cachedPayload)).toBe(false);
+  });
+
+  it('returns false when contentHash differs', () => {
+    const input = { ...baseInput, contentHash: 'ee'.repeat(32) };
+    expect(isIdempotentSigningRetry(input, cachedPayload)).toBe(false);
+  });
+
+  it('returns false when previousSignedCheckpointHash differs (broken chain)', () => {
+    const input = { ...baseInput, previousSignedCheckpointHash: 'dd'.repeat(32) };
+    expect(isIdempotentSigningRetry(input, cachedPayload)).toBe(false);
+  });
+
+  it('returns false when eventIndex differs', () => {
+    const input = { ...baseInput, eventIndex: 200 };
+    expect(isIdempotentSigningRetry(input, cachedPayload)).toBe(false);
+  });
+
+  it('returns false when sessionId differs', () => {
+    const input = { ...baseInput, sessionId: 'session-B' };
+    expect(isIdempotentSigningRetry(input, cachedPayload)).toBe(false);
+  });
+
+  it('returns false when tabId differs', () => {
+    const input = { ...baseInput, tabId: 'tab-2' };
+    expect(isIdempotentSigningRetry(input, cachedPayload)).toBe(false);
+  });
+
+  it('returns false when checkpointIndex differs', () => {
+    const input = { ...baseInput, checkpointIndex: 6 };
+    expect(isIdempotentSigningRetry(input, cachedPayload)).toBe(false);
+  });
+
+  it('returns false when totalEventsSincePrevious differs', () => {
+    const input = { ...baseInput, totalEventsSincePrevious: 99 };
+    expect(isIdempotentSigningRetry(input, cachedPayload)).toBe(false);
+  });
+
+  it('returns false when initialEventChainHash differs', () => {
+    const input = { ...baseInput, initialEventChainHash: 'cc'.repeat(32) };
+    expect(isIdempotentSigningRetry(input, cachedPayload)).toBe(false);
+  });
+
+  it('treats null === null for previousSignedCheckpointHash', () => {
+    const input = { ...baseInput, previousSignedCheckpointHash: null };
+    const cached = { ...cachedPayload, previousSignedCheckpointHash: null };
+    expect(isIdempotentSigningRetry(input, cached)).toBe(true);
+  });
+
+  it('returns false when input has null but cached has hash', () => {
+    const input = { ...baseInput, previousSignedCheckpointHash: null };
+    expect(isIdempotentSigningRetry(input, cachedPayload)).toBe(false);
   });
 });

@@ -14,8 +14,10 @@ import {
   CHECKPOINT_PUBLIC_KEYS,
   createSignedCheckpointEnvelope,
   findCheckpointPublicKey,
+  isIdempotentSigningRetry,
   validateSignedCheckpointInput,
 } from '@typedcode/shared/checkpoint';
+import type { SignedCheckpointEnvelope } from '@typedcode/shared/checkpoint';
 
 export interface CheckpointEnv {
   CHECKPOINT_SESSIONS: KVNamespace;
@@ -30,6 +32,15 @@ interface SessionRecord {
   lastCheckpointIndex: number;
   lastServerTimestamp: string;
   signedCount: number;
+  /**
+   * 直近に発行した envelope。冪等性のために保持する。
+   *
+   * 応答喪失 (network instability) からクライアントが同じ checkpointIndex で
+   * 同内容の再要求を送ってきた場合、再署名せずこの envelope を返却する。
+   * これがないと、サーバは KV 上で `lastCheckpointIndex` の単調性違反を理由に
+   * 409 を返してしまい、その checkpoint は永久に失われる。
+   */
+  lastEnvelope?: SignedCheckpointEnvelope;
 }
 
 /** session record の TTL (秒). 検証可能性とは無関係 — 漏洩 sessionId による
@@ -48,6 +59,7 @@ interface ErrorBody {
   code:
     | 'SCHEMA_INVALID'
     | 'NON_MONOTONIC'
+    | 'CHECKPOINT_CONFLICT'
     | 'SESSION_LIMIT_EXCEEDED'
     | 'SIGNING_KEY_NOT_CONFIGURED'
     | 'SIGNING_KEY_UNKNOWN'
@@ -143,6 +155,26 @@ export async function handleSignCheckpoint(
   const firstSeenAt = existing?.firstSeenAt ?? nowIso;
 
   if (existing) {
+    // 冪等性チェック: クライアントが「応答喪失からのリトライ」で同じ checkpointIndex
+    // を再送してきた場合、内容一致なら新たに署名せず前回の envelope をそのまま返す。
+    // これがないと NON_MONOTONIC 扱いでクライアントが詰む。
+    if (
+      input.checkpointIndex === existing.lastCheckpointIndex &&
+      existing.lastEnvelope
+    ) {
+      if (isIdempotentSigningRetry(input, existing.lastEnvelope.payload)) {
+        return jsonResponse({ envelope: existing.lastEnvelope }, 200, responder.cors());
+      }
+      // 同じ index で別内容 — 本物の衝突 (sessionId 重複生成 or 改竄)
+      return jsonResponse(
+        {
+          error: `checkpointIndex ${input.checkpointIndex} already signed with different content`,
+          code: 'CHECKPOINT_CONFLICT',
+        } satisfies ErrorBody,
+        409,
+        responder.cors()
+      );
+    }
     if (input.checkpointIndex <= existing.lastCheckpointIndex) {
       return jsonResponse(
         {
@@ -190,6 +222,7 @@ export async function handleSignCheckpoint(
     lastCheckpointIndex: input.checkpointIndex,
     lastServerTimestamp: nowIso,
     signedCount: (existing?.signedCount ?? 0) + 1,
+    lastEnvelope: envelope,
   };
   try {
     await env.CHECKPOINT_SESSIONS.put(sessionKey, JSON.stringify(nextRecord), {

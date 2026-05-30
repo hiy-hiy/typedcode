@@ -15,6 +15,7 @@ export {
   verifyProofSignedCheckpoints,
   createSignedCheckpointEnvelope,
   validateSignedCheckpointInput,
+  isIdempotentSigningRetry,
 } from './signedCheckpoints.js';
 
 export type {

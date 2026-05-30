@@ -96,6 +96,17 @@ export class SignedCheckpointService {
   private lastEventIndex = -1;
   /** online/offline リスナのデタッチ用 */
   private onlineListener: (() => void) | null = null;
+  /**
+   * flush() の単一実行ガード。
+   *
+   * これが true の間、追加の flush() 呼び出しは no-op で即座にリターンする。
+   * 旧実装では複数の flush() が並列に走り、同じ eventIndex に対する signOne()
+   * を二重発火させ得た (応答が遅い checkpoint の直後に別の checkpoint が来た
+   * ケース)。ネットワーク不安定下でサーバ応答が遅延すると顕在化し、
+   * 同一 checkpointIndex に対して異なる serverTimestamp の envelope が二発返って
+   * 上書きされ、後続の `previousSignedCheckpointHash` 連鎖が壊れていた。
+   */
+  private flushing = false;
   /** disposed flag */
   private disposed = false;
 
@@ -247,15 +258,28 @@ export class SignedCheckpointService {
 
   private async flush(): Promise<void> {
     if (this.disposed) return;
-    if (!this.isOnline()) return;
-    // 順序を保証するため eventIndex 昇順で処理
-    const eventIndexes = [...this.queue.keys()].sort((a, b) => a - b);
-    for (const eventIndex of eventIndexes) {
-      if (this.disposed) return;
-      const entry = this.queue.get(eventIndex);
-      if (!entry) continue;
-      const ok = await this.signOne(eventIndex, entry);
-      if (!ok) break; // 失敗したら以降は次の online タイミング or backoff timer で再試行
+    // single-flight: 既に flush 中なら追加呼び出しは何もしない。
+    // (signOne 中の await でループを抜けた後、queue に残りがあれば自分の while で
+    //  処理するので取り零しは無い。新規 checkpoint で void this.flush() されても
+    //  この guard で no-op に。)
+    if (this.flushing) return;
+    this.flushing = true;
+    try {
+      while (!this.disposed && this.queue.size > 0) {
+        if (!this.isOnline()) return;
+        // 連鎖整合を保つため eventIndex の昇順で処理
+        let nextEventIndex: number | null = null;
+        for (const k of this.queue.keys()) {
+          if (nextEventIndex === null || k < nextEventIndex) nextEventIndex = k;
+        }
+        if (nextEventIndex === null) return;
+        const entry = this.queue.get(nextEventIndex);
+        if (!entry) continue;
+        const ok = await this.signOne(nextEventIndex, entry);
+        if (!ok) return; // 失敗時は backoff 再試行 / online 復帰 / 次の handleNewCheckpoint に委ねる
+      }
+    } finally {
+      this.flushing = false;
     }
   }
 

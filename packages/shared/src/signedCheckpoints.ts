@@ -194,6 +194,36 @@ export async function hashSignedCheckpointPayload(
   return computeHash(deterministicStringify(payload));
 }
 
+/**
+ * 同一 `(sessionId, checkpointIndex)` に対する再要求が「論理的に同じ checkpoint」
+ * を指しているかを判定する。worker は判定が `true` のとき、新たに署名を発行
+ * せずキャッシュ済 envelope を返すことで冪等性を担保し、応答喪失からのリトライ
+ * を救済する。
+ *
+ * 連鎖整合に関与するフィールド (sessionId, tabId, checkpointIndex, eventIndex,
+ * initialEventChainHash, chainHash, contentHash, previousSignedCheckpointHash,
+ * totalEventsSincePrevious) を比較する。`clientTimestamp` は意図的に除外
+ * している: ページリロード後のセッション復元で同じ checkpoint が異なる
+ * clientTimestamp で再エンキューされ得るが、連鎖検証性には影響しないため、
+ * 内容として同一なら救済する方が運用上望ましい。
+ */
+export function isIdempotentSigningRetry(
+  input: SignedCheckpointInput,
+  cached: SignedCheckpointPayload
+): boolean {
+  return (
+    input.sessionId === cached.sessionId &&
+    input.tabId === cached.tabId &&
+    input.checkpointIndex === cached.checkpointIndex &&
+    input.eventIndex === cached.eventIndex &&
+    input.initialEventChainHash === cached.initialEventChainHash &&
+    input.chainHash === cached.chainHash &&
+    input.contentHash === cached.contentHash &&
+    input.previousSignedCheckpointHash === cached.previousSignedCheckpointHash &&
+    input.totalEventsSincePrevious === cached.totalEventsSincePrevious
+  );
+}
+
 function hexToUint8Array(hex: string): Uint8Array {
   if (hex.length % 2 !== 0) {
     throw new Error('Invalid hex string length');
