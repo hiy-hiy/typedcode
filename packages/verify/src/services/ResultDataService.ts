@@ -165,6 +165,7 @@ export function buildResultData(tabState: VerifyTabState): ResultData | null {
             },
             temporal: verificationResult.signedCheckpointTemporal ?? null,
             reason: verificationResult.signedCheckpointReason,
+            report: verificationResult.signedCheckpointReport,
           }
         : undefined,
   };

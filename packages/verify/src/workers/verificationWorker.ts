@@ -4,7 +4,9 @@
  */
 
 import {
+  CHECKPOINT_PUBLIC_KEYS,
   TypingProof,
+  findCheckpointPublicKey,
   verifyCheckpoints,
   verifyContentReplay,
   verifyFinalChainHash,
@@ -13,14 +15,22 @@ import {
   verifyProofSignedCheckpoints,
 } from '@typedcode/shared';
 import type {
-  StoredEvent,
   CheckpointData,
-  ProofData,
-  FingerprintComponents,
-  SignedCheckpointsVerificationResult,
   ExportedProof,
+  FingerprintComponents,
+  ProofData,
+  SignedCheckpointsVerificationResult,
+  StoredEvent,
 } from '@typedcode/shared';
-import type { VerificationMode, PoswMode, VerificationResultData } from '../types.js';
+import type {
+  AnchorEnvelopeIssue,
+  AnchorKeyInfo,
+  AnchorPoint,
+  PoswMode,
+  SignedCheckpointReport,
+  VerificationMode,
+  VerificationResultData,
+} from '../types.js';
 
 // Worker内で使用するメッセージ型
 interface VerifyRequest {
@@ -288,7 +298,13 @@ async function verify(request: VerifyRequest): Promise<void> {
     // 4. PoSW統計を計算
     const poswStats = calculatePoSWStats(proofData.proof.events);
 
-    // 5. 結果を送信
+    // 5. 「時刻アンカー」カードの根拠表示用の詳細情報を組み立てる
+    const signedCheckpointReport = buildSignedCheckpointReport(
+      proofData.checkpoints ?? [],
+      signedCheckpointResult
+    );
+
+    // 6. 結果を送信
     sendResult(id, {
       metadataValid,
       rootValid,
@@ -308,10 +324,107 @@ async function verify(request: VerifyRequest): Promise<void> {
       signedCheckpointCoverage: signedCheckpointResult.coverage,
       signedCheckpointTemporal: signedCheckpointResult.temporal,
       signedCheckpointReason: signedCheckpointResult.reason,
+      signedCheckpointReport,
     });
   } catch (error) {
     sendError(id, error instanceof Error ? error.message : String(error));
   }
+}
+
+/**
+ * Signed checkpoint カードの「展開時の根拠」表示に渡す詳細情報を組み立てる。
+ *
+ * 含める情報:
+ * - 検証の母集団: proof 内の checkpoint 総数 / 署名済み数 / valid 数
+ * - 範囲: 最初の anchor (cp #0) と最後の anchor の (checkpointIndex, eventIndex,
+ *   serverTimestamp, clientTimestamp)。Coverage 行の補強として使える。
+ * - 鍵レジストリ整合: 各 envelope の keyId を一意化して registry を引き、
+ *   description / status / validFrom 等を返す (鍵 rotation や revoke の根拠)。
+ * - 失敗 / 警告 envelope の特定: verifySignedCheckpoints の details から
+ *   valid=false や warning 付きのものを抜き出す。エラー位置の根拠になる。
+ */
+function buildSignedCheckpointReport(
+  checkpoints: readonly CheckpointData[],
+  result: SignedCheckpointsVerificationResult
+): SignedCheckpointReport {
+  const signed = checkpoints.filter((cp) => cp.signature);
+  const detailByEvent = new Map(result.details.map((d) => [d.eventIndex, d]));
+
+  const firstEnvelope = signed[0]?.signature;
+  const lastEnvelope = signed[signed.length - 1]?.signature;
+
+  const toAnchor = (env: { payload: { checkpointIndex: number; eventIndex: number; serverTimestamp: string; clientTimestamp: string } } | undefined): AnchorPoint | undefined =>
+    env
+      ? {
+          checkpointIndex: env.payload.checkpointIndex,
+          eventIndex: env.payload.eventIndex,
+          serverTimestamp: env.payload.serverTimestamp,
+          clientTimestamp: env.payload.clientTimestamp,
+        }
+      : undefined;
+
+  // 一意な keyId を抽出 (順序保持)
+  const uniqueKeyIds: string[] = [];
+  const seenKeyIds = new Set<string>();
+  for (const cp of signed) {
+    const kid = cp.signature?.keyId;
+    if (!kid || seenKeyIds.has(kid)) continue;
+    seenKeyIds.add(kid);
+    uniqueKeyIds.push(kid);
+  }
+
+  const keys: AnchorKeyInfo[] = uniqueKeyIds.map((keyId) => {
+    const entry = findCheckpointPublicKey(keyId, CHECKPOINT_PUBLIC_KEYS);
+    if (!entry) {
+      return { keyId, status: 'unknown' };
+    }
+    return {
+      keyId,
+      status: entry.status,
+      algorithm: entry.algorithm,
+      description: entry.description,
+      validFrom: entry.validFrom,
+      validUntil: entry.validUntil,
+      revokedAt: entry.revokedAt,
+    };
+  });
+
+  const failedEnvelopes: AnchorEnvelopeIssue[] = [];
+  const warningEnvelopes: AnchorEnvelopeIssue[] = [];
+  for (const cp of signed) {
+    const payload = cp.signature?.payload;
+    if (!payload) continue;
+    const detail = detailByEvent.get(payload.eventIndex);
+    if (detail && !detail.valid) {
+      failedEnvelopes.push({
+        checkpointIndex: payload.checkpointIndex,
+        eventIndex: payload.eventIndex,
+        reason: detail.reason ?? 'invalid',
+      });
+    }
+    if (detail?.warning) {
+      warningEnvelopes.push({
+        checkpointIndex: payload.checkpointIndex,
+        eventIndex: payload.eventIndex,
+        reason: detail.warning,
+      });
+    }
+  }
+
+  const validCount = result.details.filter((d) => d.valid).length;
+
+  return {
+    totalCheckpoints: checkpoints.length,
+    signedCount: signed.length,
+    validCount,
+    firstSeenAt: firstEnvelope?.payload.firstSeenAt,
+    initialEventChainHash: firstEnvelope?.payload.initialEventChainHash,
+    firstAnchor: toAnchor(firstEnvelope),
+    lastAnchor: toAnchor(lastEnvelope),
+    keys,
+    failedEnvelopes,
+    warningEnvelopes,
+  };
 }
 
 // メッセージハンドラ

@@ -17,6 +17,7 @@ import type {
   PoswMode,
 } from '../types';
 import type { SignedCheckpointsVerificationResult } from '@typedcode/shared';
+import type { SignedCheckpointReport } from '../types';
 import { escapeHtml, type TypingPatternAnalysis } from '@typedcode/shared';
 import { SyntaxHighlighter } from '../services/SyntaxHighlighter.js';
 import { TypingPatternCard } from './TypingPatternCard.js';
@@ -45,6 +46,8 @@ export interface ResultData {
     coverage: SignedCheckpointsVerificationResult['coverage'];
     temporal: SignedCheckpointsVerificationResult['temporal'];
     reason?: string;
+    /** 「展開時の根拠」表示用の追加情報 */
+    report?: SignedCheckpointReport;
   };
 }
 
@@ -128,6 +131,8 @@ export class ResultPanel {
   private anchoringWarning: HTMLElement;
   private anchoringReasonRow: HTMLElement;
   private anchoringReason: HTMLElement;
+  private anchoringDetails: HTMLElement;
+  private anchoringDetailsContent: HTMLElement;
 
   private attestationIcon: HTMLElement;
   private attestationBadge: HTMLElement;
@@ -241,6 +246,8 @@ export class ResultPanel {
     this.anchoringWarning = document.getElementById('anchoring-warning')!;
     this.anchoringReasonRow = document.getElementById('anchoring-reason-row')!;
     this.anchoringReason = document.getElementById('anchoring-reason')!;
+    this.anchoringDetails = document.getElementById('anchoring-details')!;
+    this.anchoringDetailsContent = document.getElementById('anchoring-details-content')!;
 
     // Attestation card
     this.cardAttestation = document.getElementById('card-attestation')!;
@@ -631,6 +638,7 @@ export class ResultPanel {
       this.anchoringTemporalRow.style.display = 'none';
       this.anchoringWarningRow.style.display = 'none';
       this.anchoringReasonRow.style.display = 'none';
+      this.anchoringDetails.style.display = 'none';
       return;
     }
     if (!sc.valid) {
@@ -647,6 +655,7 @@ export class ResultPanel {
       } else {
         this.anchoringReasonRow.style.display = 'none';
       }
+      this.renderAnchoringDetails(sc);
       return;
     }
 
@@ -674,6 +683,211 @@ export class ResultPanel {
       this.anchoringTemporalRow.style.display = 'none';
       this.anchoringWarningRow.style.display = 'none';
     }
+
+    this.renderAnchoringDetails(sc);
+  }
+
+  /**
+   * 「時刻アンカー」カード展開時の根拠詳細を描画する。
+   *
+   * Card 上段に出している「状態 / カバレッジ / 時間スパン比」だけでは
+   * 「なぜ verify=true / false なのか」を辿れないため、ここで:
+   *  - 使用された署名鍵の registry 整合性 (鍵 ID / status / 有効期間 / 説明)
+   *  - 最初/最後の anchor の (cp index, eventIndex, server/client timestamp)
+   *  - 時間スパンの生値と post-hoc 判定の閾値
+   *  - 個別 checkpoint 検証の合否カウントと失敗位置
+   * を提示する。
+   */
+  private renderAnchoringDetails(sc: NonNullable<ResultData['signedCheckpoint']>): void {
+    const report = sc.report;
+    if (!report) {
+      this.anchoringDetails.style.display = 'none';
+      return;
+    }
+    this.anchoringDetails.style.display = '';
+    this.anchoringDetailsContent.innerHTML = this.buildAnchorDetailsHtml(report, sc.temporal);
+  }
+
+  /**
+   * 詳細セクションの内側 HTML を組み立てる。
+   *
+   * Pure な関数として書いており、外部の DOM state には依存しない。
+   * 渡される値は worker 由来で機械生成だが、念のため escapeHtml を通している。
+   */
+  private buildAnchorDetailsHtml(
+    report: NonNullable<ResultData['signedCheckpoint']>['report'],
+    temporal: NonNullable<ResultData['signedCheckpoint']>['temporal']
+  ): string {
+    if (!report) return '';
+    const sections: string[] = [];
+
+    // ---- Section: 署名鍵 ----
+    if (report.keys.length > 0) {
+      const keyItems = report.keys.map((k) => this.buildKeyRowHtml(k)).join('');
+      sections.push(
+        `<div class="anchoring-detail-section">
+          <h4 class="anchoring-detail-heading">${escapeHtml(t('result.anchoringSectionKeys'))}</h4>
+          <div class="anchoring-key-list">${keyItems}</div>
+        </div>`
+      );
+    }
+
+    // ---- Section: アンカー範囲 ----
+    const rangeRows: string[] = [];
+    rangeRows.push(this.detailRow(t('result.anchoringTotalCheckpoints'), String(report.totalCheckpoints)));
+    rangeRows.push(this.detailRow(t('result.anchoringSignedCount'), String(report.signedCount)));
+    rangeRows.push(this.detailRow(t('result.anchoringValidCount'), String(report.validCount)));
+    if (report.firstSeenAt) {
+      rangeRows.push(this.detailRow(t('result.anchoringFirstSeenAt'), report.firstSeenAt));
+    }
+    if (report.firstAnchor) {
+      rangeRows.push(this.detailRow(t('result.anchoringFirstAnchor'), this.formatAnchorPoint(report.firstAnchor)));
+    }
+    if (report.lastAnchor) {
+      rangeRows.push(this.detailRow(t('result.anchoringLastAnchor'), this.formatAnchorPoint(report.lastAnchor)));
+    }
+    if (report.initialEventChainHash) {
+      rangeRows.push(
+        this.detailRow(
+          t('result.anchoringInitialChainHash'),
+          report.initialEventChainHash,
+          'anchoring-detail-hash'
+        )
+      );
+    }
+    sections.push(
+      `<div class="anchoring-detail-section">
+        <h4 class="anchoring-detail-heading">${escapeHtml(t('result.anchoringSectionRange'))}</h4>
+        ${rangeRows.join('')}
+      </div>`
+    );
+
+    // ---- Section: 時間スパン分析 ----
+    if (temporal) {
+      const serverSec = (temporal.serverSpanMs / 1000).toFixed(1);
+      const clientSec = (temporal.clientSpanMs / 1000).toFixed(1);
+      const ratioStr = temporal.ratio !== null ? temporal.ratio.toFixed(3) : 'n/a';
+      const verdictKey = temporal.postHocSuspected
+        ? 'result.anchoringPostHocFlagged'
+        : 'result.anchoringPostHocClear';
+      const verdictClass = temporal.postHocSuspected
+        ? 'anchoring-verdict warning'
+        : 'anchoring-verdict success';
+      sections.push(
+        `<div class="anchoring-detail-section">
+          <h4 class="anchoring-detail-heading">${escapeHtml(t('result.anchoringSectionTemporal'))}</h4>
+          ${this.detailRow(t('result.anchoringServerSpan'), `${serverSec}s (${temporal.serverSpanMs}ms)`)}
+          ${this.detailRow(t('result.anchoringClientSpan'), `${clientSec}s (${temporal.clientSpanMs}ms)`)}
+          ${this.detailRow(t('result.anchoringRatio'), ratioStr)}
+          <p class="anchoring-detail-note">${escapeHtml(t('result.anchoringPostHocCriteria'))}</p>
+          <p class="${verdictClass}">${escapeHtml(t(verdictKey))}</p>
+        </div>`
+      );
+    }
+
+    // ---- Section: 個別検証 / 失敗 ----
+    if (report.failedEnvelopes.length === 0 && report.warningEnvelopes.length === 0) {
+      sections.push(
+        `<div class="anchoring-detail-section">
+          <h4 class="anchoring-detail-heading">${escapeHtml(t('result.anchoringSectionChecks'))}</h4>
+          <p class="anchoring-detail-success">✓ ${escapeHtml(t('result.anchoringNoFailures'))} (${report.validCount}/${report.signedCount})</p>
+        </div>`
+      );
+    } else {
+      const failures = report.failedEnvelopes
+        .map((e) =>
+          `<li class="anchoring-failure-item">${escapeHtml(
+            this.formatFailureLine(e.checkpointIndex, e.eventIndex, e.reason)
+          )}</li>`
+        )
+        .join('');
+      const warnings = report.warningEnvelopes
+        .map((e) => {
+          const reason =
+            e.reason === 'key-revoked-but-trusted-by-time'
+              ? t('result.anchoringWarningRevoked')
+              : e.reason;
+          return `<li class="anchoring-warning-item">${escapeHtml(
+            this.formatFailureLine(e.checkpointIndex, e.eventIndex, reason)
+          )}</li>`;
+        })
+        .join('');
+      sections.push(
+        `<div class="anchoring-detail-section">
+          <h4 class="anchoring-detail-heading">${escapeHtml(t('result.anchoringSectionFailures'))}</h4>
+          ${failures ? `<ul class="anchoring-failure-list">${failures}</ul>` : ''}
+          ${warnings ? `<ul class="anchoring-warning-list">${warnings}</ul>` : ''}
+        </div>`
+      );
+    }
+
+    return sections.join('');
+  }
+
+  private buildKeyRowHtml(k: NonNullable<ResultData['signedCheckpoint']>['report'] extends infer R
+    ? R extends { keys: Array<infer K> } ? K : never
+    : never): string {
+    const statusKey =
+      k.status === 'active'
+        ? 'result.anchoringKeyStatusActive'
+        : k.status === 'revoked'
+          ? 'result.anchoringKeyStatusRevoked'
+          : 'result.anchoringKeyStatusUnknown';
+    const statusClass =
+      k.status === 'active' ? 'success' : k.status === 'revoked' ? 'error' : 'warning';
+    const rows: string[] = [];
+    rows.push(
+      `<div class="anchoring-key-id"><span class="anchoring-detail-hash">${escapeHtml(k.keyId)}</span></div>`
+    );
+    rows.push(
+      `<div class="anchoring-key-status ${statusClass}">${escapeHtml(t(statusKey))}</div>`
+    );
+    if (k.description) {
+      rows.push(this.detailRow(t('result.anchoringKeyDescription'), k.description));
+    }
+    if (k.algorithm) {
+      rows.push(this.detailRow(t('result.anchoringKeyAlgorithm'), k.algorithm));
+    }
+    if (k.validFrom) {
+      rows.push(this.detailRow(t('result.anchoringKeyValidFrom'), k.validFrom));
+    }
+    if (k.validUntil) {
+      rows.push(this.detailRow(t('result.anchoringKeyValidUntil'), k.validUntil));
+    }
+    if (k.revokedAt) {
+      rows.push(this.detailRow(t('result.anchoringKeyRevokedAt'), k.revokedAt));
+    }
+    return `<div class="anchoring-key-card">${rows.join('')}</div>`;
+  }
+
+  private detailRow(label: string, value: string, valueClass?: string): string {
+    const cls = valueClass ? ` ${valueClass}` : '';
+    return `<div class="anchoring-detail-row">
+      <span class="anchoring-detail-label">${escapeHtml(label)}</span>
+      <span class="anchoring-detail-value${cls}">${escapeHtml(value)}</span>
+    </div>`;
+  }
+
+  private formatAnchorPoint(p: {
+    checkpointIndex: number;
+    eventIndex: number;
+    serverTimestamp: string;
+    clientTimestamp: string;
+  }): string {
+    const location = t('result.anchoringAnchorAt')
+      .replace('{cpIdx}', String(p.checkpointIndex))
+      .replace('{eventIdx}', String(p.eventIndex));
+    const stamps = t('result.anchoringAnchorTimestamp')
+      .replace('{server}', p.serverTimestamp)
+      .replace('{client}', p.clientTimestamp);
+    return `${location}\n${stamps}`;
+  }
+
+  private formatFailureLine(checkpointIndex: number, eventIndex: number, reason: string): string {
+    return t('result.anchoringFailedAt')
+      .replace('{cpIdx}', String(checkpointIndex))
+      .replace('{eventIdx}', String(eventIndex))
+      .replace('{reason}', reason);
   }
 
   updateChartStats(stats: {
