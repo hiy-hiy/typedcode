@@ -60,7 +60,7 @@ TypedCode は、ブラウザ上のコードエディタにおける編集操作 
 | `@typedcode/shared` | 型定義、ハッシュチェーン、PoSW、署名検証、共通ユーティリティ。ブラウザ/Node 両方で動く |
 | `@typedcode/editor` | Monaco エディタ + 録画ロジック + エクスポート機能 (Vite, ブラウザ) |
 | `@typedcode/verify` | proof 検証 UI (Vite, ブラウザ) |
-| `@typedcode/verify-cli` | proof 検証 CLI (Node ≥22) |
+| `@typedcode/verify-cli` | proof 検証 CLI (Node ≥24) |
 | `@typedcode/workers` | Cloudflare Workers (Turnstile + 署名チェックポイント + 検証 endpoint) |
 
 ### データの流れ (概要)
