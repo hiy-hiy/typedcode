@@ -43,7 +43,7 @@ VerificationQueue (Web Worker)
     ├─ タイムスタンプ連続性チェック
     ├─ previousHash 検証
     ├─ ハッシュ再計算
-    ├─ PoSW 検証 (10,000 反復)
+    ├─ PoSW 検証 (POSW_ITERATIONS 反復)
     └─ 署名済みチェックポイントの検証
     ↓
 AttestationService.verify() (Workers API)

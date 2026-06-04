@@ -39,7 +39,7 @@ File Selection (drag&drop / FSA API)
      ├─ timestamp 単調性
      ├─ previousHash 検証
      ├─ ハッシュ再計算
-     ├─ PoSW (10000 反復)
+     ├─ PoSW (POSW_ITERATIONS 反復)
      └─ 署名済み cp の連結検証 (任意)
   → AttestationService.verify() (Workers API)
   → ResultPanel + charts

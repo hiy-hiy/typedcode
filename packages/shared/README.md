@@ -129,53 +129,16 @@ const poswResult = await verifyPoSW(event);
 
 ## 型定義
 
-### EventType (25 種類)
+### EventType
 
-```typescript
-type EventType =
-  // Content
-  | 'contentChange' | 'contentSnapshot' | 'externalInput' | 'templateInjection'
-  // Cursor
-  | 'cursorPositionChange' | 'selectionChange'
-  // Input
-  | 'keyDown' | 'keyUp' | 'mousePositionChange'
-  // Window
-  | 'focusChange' | 'visibilityChange' | 'windowResize'
-  // System
-  | 'editorInitialized' | 'networkStatusChange'
-  // Authentication
-  | 'humanAttestation' | 'preExportAttestation' | 'termsAccepted'
-  // Execution
-  | 'codeExecution' | 'terminalInput'
-  // Capture
-  | 'screenshotCapture' | 'screenShareStart' | 'screenShareStop' | 'screenShareOptOut'
-  // Session
-  | 'sessionResumed' | 'copyOperation';
-```
+エディタ上のあらゆる操作 (コンテンツ変更、カーソル、入力、ウィンドウ、認証、実行、キャプチャ、セッション) をカバーする union 型。**唯一の真実は [`src/types/events.ts`](src/types/events.ts) の定義**。
 
-### InputType (26 種類)
+### InputType
 
-```typescript
-// 許可される入力タイプ (20 種類)
-type AllowedInputType =
-  | 'insertText' | 'insertLineBreak' | 'insertParagraph' | 'insertTab'
-  | 'insertFromComposition' | 'insertCompositionText' | 'deleteCompositionText'
-  | 'deleteContentBackward' | 'deleteContentForward'
-  | 'deleteWordBackward' | 'deleteWordForward'
-  | 'deleteSoftLineBackward' | 'deleteSoftLineForward'
-  | 'deleteHardLineBackward' | 'deleteHardLineForward'
-  | 'deleteByDrag' | 'deleteByCut'
-  | 'historyUndo' | 'historyRedo'
-  | 'insertFromInternalPaste';  // 同一エディタ内のコピー＆ペースト (許可)
+W3C InputEvent の `inputType` に対応する union 型。許可リスト (`ALLOWED_INPUT_TYPES`) と禁止リスト (`PROHIBITED_INPUT_TYPES`) は [`src/typingProof/InputTypeValidator.ts`](src/typingProof/InputTypeValidator.ts) を参照。判定方針の根拠は [docs/adr/0005-input-type-policy.md](../../docs/adr/0005-input-type-policy.md)。
 
-// 外部入力 (禁止、5 種類)
-type BlockedInputType =
-  | 'insertFromPaste' | 'insertFromDrop' | 'insertFromYank'
-  | 'insertReplacementText' | 'insertFromPasteAsQuotation';
-
-// その他 (1 種類)
-// 'replaceContent'
-```
+- `insertFromInternalPaste` (同一エディタ内のコピー＆ペースト) は許可される
+- `insertFromPaste` などの外部入力は禁止 (ピュアタイピング判定 NG)
 
 ### 主要な型
 
@@ -206,7 +169,7 @@ npm run test:coverage
 
 ```
 h_0 = SHA-256(fingerprint || random)
-PoSW_i = iterate(SHA-256, h_{i-1} || event_i, 10000)
+PoSW_i = iterate(SHA-256, h_{i-1} || event_i, POSW_ITERATIONS)
 h_i = SHA-256(h_{i-1} || JSON(event_i) || PoSW_i)
 ```
 
@@ -215,26 +178,17 @@ h_i = SHA-256(h_{i-1} || JSON(event_i) || PoSW_i)
 
 ### Proof of Sequential Work (PoSW)
 
-| 項目 | 値 |
-|----------|-------|
-| 反復回数 | 1 イベントあたり 10,000 回 |
-| Nonce | 16 バイトのランダム値 |
-| タイムアウト | 30 秒 |
-| 実行環境 | Web Worker (UI ブロックなし) |
+各イベントごとに前ハッシュ + nonce を起点に SHA-256 を反復計算 (`POSW_ITERATIONS` 回) し、Web Worker で実行する。反復は前ハッシュに依存する直列計算なので、イベントの一括偽造や日時の遡及付与が困難になる。
 
-PoSW により、イベントの一括偽造や日時の遡及付与が困難になります。各イベントの計算は前ハッシュに依存して直列であるためです。
+定数の値、タイムアウト、nonce サイズなどの仕様は [docs/system-spec.md §4.4](../../docs/system-spec.md) を参照。
 
 ### チェックポイントシステム (ハイブリッドトリガ)
 
-| 項目 | 値 |
-|----------|-------|
-| トリガ | 直前 cp から **100 イベント** または **10 秒** のいずれかが先に成立 |
-| 評価タイミング | `recordEvent` 呼び出し時のみ (無入力中は作成されない) |
-| 内容 | `eventIndex`, `hash`, `timestamp`, `contentHash`, 任意の `signature` |
+直前 cp からの経過 **イベント数 (`DEFAULT_MAX_EVENTS_PER_CHECKPOINT`)** または **経過時間 (`DEFAULT_MAX_CHECKPOINT_INTERVAL_MS`)** のいずれかが先に成立した時点で cp を作成する。評価は `recordEvent` 呼び出し時のみで、無入力中は cp は作られない。エクスポート時には最終イベント位置に cp が強制生成される。
 
-時刻トリガにより、無入力区間でもチェックポイント間隔の上限が 10 秒に固定されます。エクスポート時には最終イベントの位置にチェックポイントが強制生成されます。
+サーバ署名 (ECDSA-P256) が付与された cp は時刻アンカリングの本体として機能し、後付けの改ざんを困難にする。
 
-サーバ署名 (ECDSA-P256) が付与されたチェックポイントは時刻アンカリングの本体として機能し、後付けの改ざんを困難にします。
+設計判断の根拠は [docs/adr/0001-hybrid-checkpoint-trigger.md](../../docs/adr/0001-hybrid-checkpoint-trigger.md)、署名方式は [docs/adr/0002-signed-checkpoints-with-ecdsa-p256.md](../../docs/adr/0002-signed-checkpoints-with-ecdsa-p256.md) を参照。
 
 ### 検証ステップ
 
@@ -242,7 +196,7 @@ PoSW により、イベントの一括偽造や日時の遡及付与が困難に
 2. **シーケンス番号**が連続している (0, 1, 2, ...)
 3. **タイムスタンプ**が単調増加している
 4. **previousHash** が各イベントで計算値と一致する
-5. **PoSW** が各イベントで有効である (10,000 反復)
+5. **PoSW** が各イベントで `POSW_ITERATIONS` 反復として有効である
 6. **署名済みチェックポイント** (任意) のサーバ署名と連結ハッシュが一貫している
 
 ### ピュアタイピング判定
@@ -252,22 +206,17 @@ PoSW により、イベントの一括偽造や日時の遡及付与が困難に
 - `insertFromDrop` イベントなし
 - その他の禁止入力タイプを含まない
 
-注: `insertFromInternalPaste` (同一エディタセッション内のコピー＆ペースト) はピュアタイピング判定を破りません。
+注: `insertFromInternalPaste` (同一エディタセッション内のコピー＆ペースト) はピュアタイピング判定を破らない。詳細は [docs/adr/0005-input-type-policy.md](../../docs/adr/0005-input-type-policy.md)。
 
 ### 定数
 
-```typescript
-export const PROOF_FORMAT_VERSION = '1.0.0';
-export const STORAGE_FORMAT_VERSION = 1;
-export const MIN_SUPPORTED_VERSION = '1.0.0';
-export const POSW_ITERATIONS = 10000;
+すべての公開定数の **唯一の真実** はソースコード:
 
-// ハイブリッド・チェックポイントトリガ (先に成立した方で発火):
-export const DEFAULT_MAX_EVENTS_PER_CHECKPOINT = 100;       // N
-export const DEFAULT_MAX_CHECKPOINT_INTERVAL_MS = 10_000;   // T (ms)
-// `CheckpointManager.CHECKPOINT_INTERVAL` は
-// `DEFAULT_MAX_EVENTS_PER_CHECKPOINT` の deprecated エイリアスとして維持。
-```
+- バージョン定数 (`PROOF_FORMAT_VERSION`, `STORAGE_FORMAT_VERSION`, `MIN_SUPPORTED_VERSION`, `POSW_ITERATIONS`): [`src/version.ts`](src/version.ts)
+- チェックポイントトリガ (`DEFAULT_MAX_EVENTS_PER_CHECKPOINT`, `DEFAULT_MAX_CHECKPOINT_INTERVAL_MS`): [`src/typingProof/CheckpointManager.ts`](src/typingProof/CheckpointManager.ts)
+- 集計表は [docs/system-spec.md §定数一覧](../../docs/system-spec.md)
+
+`CheckpointManager.CHECKPOINT_INTERVAL` は `DEFAULT_MAX_EVENTS_PER_CHECKPOINT` の deprecated エイリアスとして維持されている (後方互換)。
 
 ## i18n
 

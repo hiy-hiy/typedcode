@@ -14,10 +14,10 @@
 
 ## 主な機能
 
-- **改ざん耐性のある証明**: 1 イベントあたり 10,000 反復の PoSW を伴う SHA-256 ハッシュチェーン
+- **改ざん耐性のある証明**: SHA-256 ハッシュチェーン + Proof of Sequential Work (PoSW)
 - **時刻アンカリング**: サーバ署名済みチェックポイント (ECDSA-P256) による、後付け改ざんに強い時刻バインディング
 - **人間認証**: Cloudflare Turnstile と HMAC 署名済みアテステーション
-- **網羅的なイベント追跡**: コンテンツ変更・キーストローク・マウス・フォーカス・可視性・ペースト/ドロップ検出・テンプレート注入・セッション復旧などを含む **25 種類のイベント**
+- **網羅的なイベント追跡**: コンテンツ変更・キーストローク・マウス・フォーカス・可視性・ペースト/ドロップ検出・テンプレート注入・セッション復旧などを記録 (一覧は [`events.ts`](packages/shared/src/types/events.ts))
 - **マルチタブ**: 複数ファイルを同時に編集し、タブ切替も追跡
 - **スクリーンショット**: 定期撮影とフォーカス喪失時の撮影、ハッシュ検証付き
 - **ブラウザ内実行**: Wasmer SDK (WebAssembly) で C / C++ / Python / JavaScript / TypeScript を実行
@@ -114,25 +114,15 @@ npm run test:coverage -w @typedcode/shared
 
 1. **イベント記録**: ユーザー操作 (キーストローク・カーソル移動・ペーストなど) を型付きイベントとして捕捉
 2. **ハッシュチェーン**: 各イベントを SHA-256 でハッシュ化し、前イベントのハッシュへ連結
-3. **PoSW 計算**: Web Worker で 1 イベントあたり 10,000 反復のハッシュ計算 (UI ブロックなし)
+3. **PoSW 計算**: Web Worker で各イベントごとに反復ハッシュ計算 (UI ブロックなし、反復数は `POSW_ITERATIONS` 固定)
 4. **時刻アンカリング**: チェックポイントを Workers で署名 (ECDSA-P256) し、サーバ時刻を結びつける
 5. **人間認証**: ファイル作成時とエクスポート前に Turnstile で人間確認
 6. **エクスポート**: 全イベント履歴・ハッシュチェーン・フィンガープリント・スクリーンショットを含む証明ファイルを出力
 7. **検証**: チェーン整合性・タイムスタンプ・PoSW・署名済みチェックポイントを独立に検証
 
-### イベントタイプ (25 種)
+### イベントタイプ
 
-| カテゴリ | イベント |
-|----------|--------|
-| Content | `contentChange`, `contentSnapshot`, `externalInput`, `templateInjection` |
-| Cursor | `cursorPositionChange`, `selectionChange` |
-| Input | `keyDown`, `keyUp`, `mousePositionChange` |
-| Window | `focusChange`, `visibilityChange`, `windowResize` |
-| System | `editorInitialized`, `networkStatusChange` |
-| Auth | `humanAttestation`, `preExportAttestation`, `termsAccepted` |
-| Execution | `codeExecution`, `terminalInput` |
-| Capture | `screenshotCapture`, `screenShareStart`, `screenShareStop`, `screenShareOptOut` |
-| Session | `sessionResumed`, `copyOperation` |
+カテゴリ分けされた union 型として定義されています。一覧と分類は [`packages/shared/src/types/events.ts`](packages/shared/src/types/events.ts)、許可/禁止の方針は [docs/adr/0005-input-type-policy.md](docs/adr/0005-input-type-policy.md) を参照してください。
 
 ### エクスポートファイル形式 (ZIP)
 

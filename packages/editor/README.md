@@ -7,8 +7,8 @@
 - **マルチタブ編集**: タブごとに独立した証明チェーン、タブ切替も追跡
 - **対応言語**: C, C++, Python, JavaScript, TypeScript
 - **テーマ**: ライト/ダークモード (システム設定の自動検出)
-- **イベント追跡**: キーストローク・カーソル・ペースト/ドロップ・ウィンドウ・フォーカス・可視性などを含む **25 種類のイベント**
-- **PoSW**: 1 イベントあたり 10,000 反復のシーケンシャルハッシュを Web Worker で計算
+- **イベント追跡**: キーストローク・カーソル・ペースト/ドロップ・ウィンドウ・フォーカス・可視性などを記録 (一覧は [`@typedcode/shared` の `events.ts`](../shared/src/types/events.ts))
+- **PoSW**: 反復シーケンシャルハッシュを Web Worker で計算 (反復数は `POSW_ITERATIONS` 固定)
 - **スクリーンショット**: 定期撮影とフォーカス喪失時の撮影、ハッシュ検証付き
 - **時刻アンカリング**: チェックポイントを Workers で ECDSA-P256 署名し、サーバ時刻と結びつける
 - **人間認証**: ファイル作成時とエクスポート前に Cloudflare Turnstile を実行
@@ -60,7 +60,7 @@ StoredEvent → localStorage + IndexedDB
 UI をブロックせずにイベントを記録します。
 
 1. `record(event)` は即座に返る
-2. PoSW 計算は Web Worker で実行 (10,000 反復)
+2. PoSW 計算は Web Worker で実行 (反復数は `POSW_ITERATIONS` 固定)
 3. UI は処理中の件数を `queuedEventCount` で表示
 4. イベントは IndexedDB へ逐次保存
 

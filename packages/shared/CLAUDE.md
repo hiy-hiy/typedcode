@@ -10,7 +10,7 @@
 ## 重要な不変条件 (壊さないこと)
 
 1. **ハッシュチェーン**: `h_i = SHA-256(h_{i-1} || JSON(event_i) || PoSW_i)`。JSON シリアライズはキー順序を決定的にする (`hashUtils.ts:deterministicStringify`)。**順序が崩れると既存の証明がすべて検証不能になる**
-2. **PoSW 反復数**: `POSW_ITERATIONS = 10000` 固定。検証側もこの値を期待する。**変更は破壊的**で、proof format version bump が必要
+2. **PoSW 反復数**: `POSW_ITERATIONS` ([`src/version.ts`](src/version.ts)) 固定。検証側もこの値を期待する。**変更は破壊的**で、proof format version bump が必要
 3. **InputType の許可/禁止リスト**: `InputTypeValidator.ts` の `ALLOWED_INPUT_TYPES` / `BLOCKED_INPUT_TYPES` がピュアタイピング判定の唯一の真実。新しい入力タイプを追加する際は判断を ADR に残す ([docs/adr/0005-input-type-policy.md](../../docs/adr/0005-input-type-policy.md))
 4. **`PROOF_FORMAT_VERSION`**: 既存 proof との互換性ある変更なら据え置き。互換性破壊なら bump 必須
 5. **`CheckpointManager`** はステートフル。`shouldCreateCheckpoint` の判定は最終 cp の eventIndex / 時刻に依存する。`setCheckpoints` で復元する際は内部状態も再構築すること (実装済み)
