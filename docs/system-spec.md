@@ -316,7 +316,7 @@ interface ExportedProof {
     timestamp: string;
     isPureTyping: boolean;
   };
-  checkpoints?: CheckpointData[];   // 33 event 間隔、各 signature? 付き
+  checkpoints?: CheckpointData[];   // 100 event または 10 秒間隔 (ハイブリッドトリガ)、各 signature? 付き
 }
 ```
 
