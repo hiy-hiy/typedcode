@@ -42,6 +42,7 @@ export interface CheckpointPublicKey {
  * - 過去 proof の検証可能性を維持するため historical commit から鍵を辿れることが重要
  */
 export const CHECKPOINT_PUBLIC_KEYS: readonly CheckpointPublicKey[] = [
+  // 本番環境
   {
     keyId: 'tcp-202605-fd6d42',
     algorithm: 'ECDSA-P256',
@@ -55,6 +56,23 @@ export const CHECKPOINT_PUBLIC_KEYS: readonly CheckpointPublicKey[] = [
     validFrom: '2026-05-28T14:43:43.346Z',
     description: 'Initial signing key. Private half lives in the Workers secret CHECKPOINT_SIGNING_KEY_JWK.',
   },
+  // staging環境
+  {
+    keyId: "tcp-202606-0e46c9",
+    algorithm: "ECDSA-P256",
+    publicKeyJwk: {
+      "key_ops": [
+        "verify"
+      ],
+      ext: true,
+      kty: "EC",
+      x: "Qi_DZKeKuvs20YHtIJ3xV_qPpBCFC0MjOVKmh8UhWD8",
+      y: "uzyGor_TS-hggx7TSm7k127NC8mJ4oPuDD1BwDuxnks",
+      crv: "P-256"
+    },
+    status: "active",
+    validFrom: "2026-06-04T16:09:16.485Z"
+  }
 ] as const;
 
 /**
