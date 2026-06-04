@@ -64,11 +64,33 @@ function isLocalhostOrigin(origin: string): boolean {
 }
 
 /**
+ * Origin を許可パターンと照合する。完全一致のほか、`https://*.example.com`
+ * 形式のサブドメイン wildcard に対応する。
+ *
+ * wildcard は **1 段以上のサブドメインを要求** する (apex は含めない)。先頭の
+ * リテラルドット (`.example.com`) を要求することで `https://evilexample.com`
+ * のような prefix 偽装を弾く。`*.<project>.pages.dev` のように自プロジェクト配下に
+ * 限定して使う前提で、`*.pages.dev` のような広すぎるパターンは設定しないこと。
+ */
+function originMatchesPattern(origin: string, pattern: string): boolean {
+  if (pattern === origin) return true;
+  const marker = '://*.';
+  const idx = pattern.indexOf(marker);
+  if (idx === -1) return false;
+  const scheme = pattern.slice(0, idx); // 例: "https"
+  const baseDomain = pattern.slice(idx + marker.length); // 例: "typedcode.pages.dev"
+  const prefix = `${scheme}://`;
+  if (!origin.startsWith(prefix)) return false;
+  const host = origin.slice(prefix.length); // origin は scheme://host[:port] でパスは持たない
+  return host.length > baseDomain.length + 1 && host.endsWith(`.${baseDomain}`);
+}
+
+/**
  * リクエスト Origin を許可リストに照合し、許可するときのみその Origin を返す。
  * 返り値を `Access-Control-Allow-Origin` にそのまま入れる (reflect)。許可しないときは null。
  *
  * 優先順位:
- *  1. `ALLOWED_ORIGINS` に完全一致 → 許可
+ *  1. `ALLOWED_ORIGINS` に一致 (完全一致 or `*.domain` サブドメイン wildcard) → 許可
  *  2. `ENVIRONMENT === 'development'` のとき localhost / 127.0.0.1 → 許可 (開発体験)
  *  3. `ALLOWED_ORIGINS` 未設定 → 後方互換で reflect (デプロイ破壊回避。production では設定必須)
  *  4. それ以外 → 拒否 (ヘッダを付与しない)
@@ -80,7 +102,7 @@ function isLocalhostOrigin(origin: string): boolean {
 function resolveCorsOrigin(origin: string | null, env: CorsEnv): string | null {
   if (!origin) return null;
   const allowed = parseAllowedOrigins(env);
-  if (allowed.includes(origin)) return origin;
+  if (allowed.some(pattern => originMatchesPattern(origin, pattern))) return origin;
   if (env.ENVIRONMENT === 'development' && isLocalhostOrigin(origin)) return origin;
   if (allowed.length === 0) return origin; // 未設定時のみ後方互換 reflect
   return null;

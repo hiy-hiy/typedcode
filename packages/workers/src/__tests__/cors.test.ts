@@ -62,4 +62,55 @@ describe('CORS allowed-origin policy', () => {
     const res = await worker.fetch(preflight(null), env);
     expect(res.headers.get('Access-Control-Allow-Origin')).not.toBe('*');
   });
+
+  // ---- production の実設定 ----
+  describe('with production ALLOWED_ORIGINS', () => {
+    const prod = () =>
+      baseEnv({ ALLOWED_ORIGINS: 'https://typedcode.dev,https://typedcode.pages.dev' });
+
+    it('allows the custom domain', async () => {
+      const res = await worker.fetch(preflight('https://typedcode.dev'), prod());
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://typedcode.dev');
+    });
+
+    it('allows the default pages.dev domain', async () => {
+      const res = await worker.fetch(preflight('https://typedcode.pages.dev'), prod());
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://typedcode.pages.dev');
+    });
+
+    it('rejects a preview subdomain (those use staging, not production)', async () => {
+      const res = await worker.fetch(preflight('https://abc123.typedcode.pages.dev'), prod());
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
+    });
+  });
+
+  // ---- staging のサブドメイン wildcard ----
+  describe('with staging wildcard ALLOWED_ORIGINS', () => {
+    const staging = () => baseEnv({ ALLOWED_ORIGINS: 'https://*.typedcode.pages.dev' });
+
+    it('allows the develop deployment', async () => {
+      const res = await worker.fetch(preflight('https://develop.typedcode.pages.dev'), staging());
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://develop.typedcode.pages.dev');
+    });
+
+    it('allows an arbitrary PR preview subdomain', async () => {
+      const res = await worker.fetch(preflight('https://feature-x.typedcode.pages.dev'), staging());
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://feature-x.typedcode.pages.dev');
+    });
+
+    it('rejects a prefix-spoofing look-alike domain', async () => {
+      const res = await worker.fetch(preflight('https://eviltypedcode.pages.dev'), staging());
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
+    });
+
+    it('rejects a different project under pages.dev', async () => {
+      const res = await worker.fetch(preflight('https://evil.pages.dev'), staging());
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
+    });
+
+    it('rejects http (scheme must match the https pattern)', async () => {
+      const res = await worker.fetch(preflight('http://develop.typedcode.pages.dev'), staging());
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
+    });
+  });
 });

@@ -21,11 +21,10 @@ compatibility_date = "2025-12-26"
 
 [vars]
 ENVIRONMENT = "production"
-# CORS 許可オリジン (カンマ区切り)。editor / verify アプリの本番ドメインを指定する。
-# production では必ず設定すること: 未設定だと後方互換で任意 Origin を reflect してしまう
-# (= ドキュメントの「ワイルドカード禁止」に反する)。シークレットではない公開ドメインなので
-# ここに直接 commit してよい。例:
-# ALLOWED_ORIGINS = "https://typedcode.example.com,https://verify.typedcode.example.com"
+# CORS 許可オリジン (カンマ区切り)。editor / verify は同一 Pages プロジェクト
+# (editor=/, verify=/verify) なので origin は 1 つ。カスタムドメインと既定の
+# pages.dev の両方を許可する。シークレットではない公開ドメインなので直接 commit してよい。
+ALLOWED_ORIGINS = "https://typedcode.dev,https://typedcode.pages.dev"
 
 [[kv_namespaces]]
 binding = "CHECKPOINT_SESSIONS"

@@ -61,12 +61,22 @@ CORS は `ALLOWED_ORIGINS` (env var, カンマ区切り) による**許可リス
 
 許可判定の優先順位:
 
-1. `ALLOWED_ORIGINS` に**完全一致** → その Origin を reflect
+1. `ALLOWED_ORIGINS` に一致 (**完全一致** or `https://*.domain` の**サブドメイン wildcard**) → その Origin を reflect
 2. `ENVIRONMENT === 'development'` のとき `localhost` / `127.0.0.1` → 自動許可 (DX)
 3. `ALLOWED_ORIGINS` **未設定** → 後方互換で reflect (デプロイ破壊回避)。**production / staging では必ず設定すること**
 4. それ以外 → `Access-Control-Allow-Origin` を**付与しない** (ブラウザのクロスオリジン読み取りを拒否)
 
 ワイルドカード `*` は一切返さない (Origin 不在のリクエストにはヘッダ自体を付けない)。許可オリジンは `wrangler.{production,staging}.toml` の `[vars]` に直接 commit する (公開ドメインでありシークレットではない)。
+
+**editor と verify は同一 Pages プロジェクト** (`editor=/`, `verify=/verify`) にデプロイされるため origin は環境ごとに 1 つ。実際の設定:
+
+| 環境 | Worker | `ALLOWED_ORIGINS` | 理由 |
+|---|---|---|---|
+| production | `typedcode-api` | `https://typedcode.dev,https://typedcode.pages.dev` | カスタムドメイン + 既定 pages.dev |
+| staging | `typedcode-api-staging` | `https://*.typedcode.pages.dev` | develop デプロイ + PR プレビュー (`<branch>.typedcode.pages.dev`) を許可 |
+| dev (local) | (local) | 未設定 | `ENVIRONMENT=development` で localhost 自動許可 |
+
+`*.domain` wildcard は **1 段以上のサブドメインを要求** し (apex は含めない)、先頭リテラルドット要求で `https://eviltypedcode.pages.dev` のような prefix 偽装を弾く。`*.pages.dev` のように広げると他人の Pages サイトまで通るので**自プロジェクト配下に限定**すること (`<branch>.<project>.pages.dev` は自プロジェクトの branch alias に限られる)。新しいカスタムドメイン (例: `www.`) を足すときは production の `ALLOWED_ORIGINS` に追記する。
 
 **CORS の限界と濫用防止**: CORS はブラウザのクロスオリジン**読み取り**のみを制限し、サーバ間アクセス (curl 等) は防げない。`/api/checkpoint/sign` は「任意 content への serverTimestamp 付き署名」を返すだけで、それ自体は何の権限も与えない (署名は『この内容がこのサーバ時刻に提示された』ことしか証明しない)。署名 API の濫用に対する実際の防御線は:
 
