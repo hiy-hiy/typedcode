@@ -229,15 +229,25 @@ CI が `wrangler` を使ってデプロイするので、適切な権限の API 
 
 ダッシュボード右側 (またはトップページ右下) に **Account ID** が表示されているのでコピーする。
 
-## M2. GitHub repo に Secrets を投入
+## M2. GitHub repo に Secrets と設定を投入
 
-### Repo level (Settings → Secrets and variables → Actions → New repository secret)
+### Repo 設定 (Settings → General)
+
+- **Automatically delete head branches** → **OFF**
+  (= API: `delete_branch_on_merge: false`)
+  ON のままだと PR マージ時に `develop` ブランチが削除されてしまい、staging デプロイのソースが消えます。今日この事故が発生したので必ず OFF に。
+
+  ```bash
+  gh api -X PATCH repos/<owner>/<repo> -F delete_branch_on_merge=false
+  ```
+
+### Repo level secrets (Settings → Secrets and variables → Actions → New repository secret)
 
 | Secret | 値 |
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | M1 で控えた token 文字列 |
 | `CLOUDFLARE_ACCOUNT_ID` | account ID |
-| `CLOUDFLARE_PROJECT_NAME` | Cloudflare Pages のプロジェクト名 (例: `typedcode`) |
+| `CLOUDFLARE_PROJECT_NAME` | Cloudflare Pages のプロジェクト名 (**M3 で作成**したもの) |
 
 ### GitHub Environments の作成
 
@@ -264,12 +274,33 @@ Settings → Environments → **New environment**:
 
 ## M3. Cloudflare 側の準備
 
+### Pages プロジェクト作成 (初回のみ)
+
+CI が `wrangler pages deploy --project-name=<name>` で使うプロジェクトが Cloudflare 上に存在する必要があります。
+
+**方法 A: Cloudflare ダッシュボード** (推奨)
+
+1. [https://dash.cloudflare.com](https://dash.cloudflare.com) → Workers & Pages → **Create application** → **Pages** → **Connect to Git** または **Direct Upload**
+2. Direct Upload なら名前 (例: `typedcode`) を入力して空のプロジェクトを作成
+3. この名前を `CLOUDFLARE_PROJECT_NAME` repo secret として M2 で投入
+
+**方法 B: wrangler CLI**
+
+```bash
+npx wrangler pages project create typedcode --production-branch=main
+```
+
+確認:
+```bash
+npx wrangler pages project list
+```
+
 ### 環境ごとの KV ネームスペース作成
 
 ```bash
 cd packages/workers
-wrangler kv namespace create CHECKPOINT_SESSIONS_STAGING
-wrangler kv namespace create CHECKPOINT_SESSIONS_PRODUCTION
+npx wrangler kv namespace create CHECKPOINT_SESSIONS_STAGING
+npx wrangler kv namespace create CHECKPOINT_SESSIONS_PRODUCTION
 ```
 
 出力された 2 つの ID を [packages/workers/wrangler.staging.toml](../packages/workers/wrangler.staging.toml) / [packages/workers/wrangler.production.toml](../packages/workers/wrangler.production.toml) の `id = "..."` に貼り付け commit する (KV ID は秘密情報ではない)。
@@ -285,22 +316,22 @@ wrangler kv namespace create CHECKPOINT_SESSIONS_PRODUCTION
 
 ### Worker 個別シークレット投入
 
-Pages bundle の `VITE_API_URL` 等は GitHub Secrets で済みますが、Worker 内で動くシークレット (`TURNSTILE_SECRET_KEY` 等) は **`wrangler secret put` で Worker に直接** 投入します。
+Pages bundle の `VITE_API_URL` 等は GitHub Secrets で済みますが、Worker 内で動くシークレット (`TURNSTILE_SECRET_KEY` 等) は **`npx wrangler secret put` で Worker に直接** 投入します。
 
 ```bash
 cd packages/workers
 
 # staging Worker
-wrangler secret put TURNSTILE_SECRET_KEY --config wrangler.staging.toml
-wrangler secret put ATTESTATION_SECRET_KEY --config wrangler.staging.toml      # openssl rand -hex 32
-wrangler secret put CHECKPOINT_SIGNING_KEY_ID --config wrangler.staging.toml   # M4 で生成
-wrangler secret put CHECKPOINT_SIGNING_KEY_JWK --config wrangler.staging.toml  # M4 で生成
+npx wrangler secret put TURNSTILE_SECRET_KEY --config wrangler.staging.toml
+npx wrangler secret put ATTESTATION_SECRET_KEY --config wrangler.staging.toml      # openssl rand -hex 32
+npx wrangler secret put CHECKPOINT_SIGNING_KEY_ID --config wrangler.staging.toml   # M4 で生成
+npx wrangler secret put CHECKPOINT_SIGNING_KEY_JWK --config wrangler.staging.toml  # M4 で生成
 
 # production Worker (同じ 4 件、値は別物にする)
-wrangler secret put TURNSTILE_SECRET_KEY --config wrangler.production.toml
-wrangler secret put ATTESTATION_SECRET_KEY --config wrangler.production.toml
-wrangler secret put CHECKPOINT_SIGNING_KEY_ID --config wrangler.production.toml
-wrangler secret put CHECKPOINT_SIGNING_KEY_JWK --config wrangler.production.toml
+npx wrangler secret put TURNSTILE_SECRET_KEY --config wrangler.production.toml
+npx wrangler secret put ATTESTATION_SECRET_KEY --config wrangler.production.toml
+npx wrangler secret put CHECKPOINT_SIGNING_KEY_ID --config wrangler.production.toml
+npx wrangler secret put CHECKPOINT_SIGNING_KEY_JWK --config wrangler.production.toml
 ```
 
 ## M4. 環境ごとの署名鍵を登録
@@ -320,10 +351,34 @@ npm run gen-checkpoint-key -w @typedcode/workers
 それぞれ:
 
 1. **公開鍵 entry** を [packages/shared/src/checkpointKeys/registry.ts](../packages/shared/src/checkpointKeys/registry.ts) の `CHECKPOINT_PUBLIC_KEYS` 配列に **append** (既存エントリは削除しない、`status: 'active'` で追加)
-2. **keyId** と **privateKey JWK** を M3 の `wrangler secret put` で対応 Worker に投入
+2. **keyId** と **privateKey JWK** を M3 の `npx wrangler secret put` で対応 Worker に投入
 3. commit & push (registry.ts 変更)
 
 ## M5. 動作確認
+
+### doctor で全項目チェック
+
+`--maintainer` を付けると **GitHub Actions / staging / production 側のすべて** を一括検査します:
+
+```bash
+npm run doctor -- --maintainer
+```
+
+検査内容 (M1-M4 で設定した項目を全網羅):
+
+- repo 設定 (`delete_branch_on_merge=false`)
+- repo level secrets (`CLOUDFLARE_API_TOKEN`, `ACCOUNT_ID`, `PROJECT_NAME`)
+- Environments (`staging`, `production`) の存在
+- production の Required reviewers
+- 各 environment の secrets (`VITE_API_URL`, `VITE_TURNSTILE_SITE_KEY`)
+- `wrangler.staging.toml` / `wrangler.production.toml` の KV ID
+- staging / production Worker のデプロイ状態
+- 各 Worker の secrets (`TURNSTILE_SECRET_KEY`, `ATTESTATION_SECRET_KEY`, `CHECKPOINT_SIGNING_KEY_ID`, `CHECKPOINT_SIGNING_KEY_JWK`)
+- Cloudflare Pages プロジェクトの存在
+
+これですべて ok なら、CI 経由のデプロイがフローします。
+
+### スモークテスト
 
 `develop` ブランチに空 commit を push:
 

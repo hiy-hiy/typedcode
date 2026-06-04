@@ -10,9 +10,11 @@
  *   - exit 0 = ok / 1 = blocking issue / 2 = ランタイムエラー
  *
  * 使い方:
- *   npm run doctor              # 通常チェック (Node のみ必須)
- *   npm run doctor -- --strict  # warning も blocking 扱い
- *   npm run doctor -- --cf      # Cloudflare 側 (KV 突合) もチェック
+ *   npm run doctor                  # ローカル dev のみ (Node のみ必須)
+ *   npm run doctor -- --strict      # warning も blocking 扱い
+ *   npm run doctor -- --cf          # ローカル KV と CF の突合も
+ *   npm run doctor -- --maintainer  # GitHub Actions / staging / production 側もチェック
+ *                                   # (CI 経由のデプロイ運用するメンテナ向け)
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -23,7 +25,8 @@ import { execSync, spawnSync } from 'node:child_process';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = new Set(process.argv.slice(2));
 const STRICT = args.has('--strict');
-const CHECK_CF = args.has('--cf');
+const CHECK_CF = args.has('--cf') || args.has('--maintainer');
+const MAINTAINER = args.has('--maintainer');
 
 const C = {
   reset: '\x1b[0m',
@@ -457,10 +460,304 @@ function checkCloudflareResources() {
 }
 
 // ============================================================================
+// メンテナ専用セクション (--maintainer フラグ時のみ)
+// ============================================================================
+
+const REQUIRED_REPO_SECRETS = [
+  'CLOUDFLARE_API_TOKEN',
+  'CLOUDFLARE_ACCOUNT_ID',
+  'CLOUDFLARE_PROJECT_NAME',
+];
+const REQUIRED_ENV_SECRETS = ['VITE_API_URL', 'VITE_TURNSTILE_SITE_KEY'];
+const REQUIRED_WORKER_SECRETS = [
+  'TURNSTILE_SECRET_KEY',
+  'ATTESTATION_SECRET_KEY',
+  'CHECKPOINT_SIGNING_KEY_ID',
+  'CHECKPOINT_SIGNING_KEY_JWK',
+];
+
+let ghAvailable = false;
+let ghRepoSlug = ''; // owner/repo
+
+// ============================================================================
+// Section 7: GitHub repo settings + Actions secrets (--maintainer)
+// ============================================================================
+function checkGitHubSetup() {
+  section('7. GitHub repo settings (--maintainer)');
+  if (!MAINTAINER) {
+    report('skip', '--maintainer を付けると GitHub Actions 用設定もチェック');
+    return;
+  }
+
+  if (!commandExists('gh')) {
+    report(
+      'fail',
+      'gh (GitHub CLI) が見つからない',
+      `インストール: https://cli.github.com/\n  macOS:   brew install gh\n  Linux:   ディストロのパッケージマネージャ\n  Windows: winget install GitHub.cli\n認証: gh auth login`
+    );
+    return;
+  }
+  ghAvailable = true;
+
+  const authStatus = spawnSync('gh', ['auth', 'status'], { encoding: 'utf-8' });
+  if (authStatus.status !== 0) {
+    report('fail', 'gh が未認証', `gh auth login`);
+    return;
+  }
+  report('ok', 'gh CLI: 認証済');
+
+  // 対象 repo の特定 (origin から)
+  const origin = tryExec('git config --get remote.origin.url', { cwd: REPO_ROOT });
+  const m = origin?.match(/[:/]([^/:]+)\/([^/]+?)(\.git)?$/);
+  if (!m) {
+    report('fail', `git remote origin から repo を特定できない (${origin})`, '');
+    return;
+  }
+  ghRepoSlug = `${m[1]}/${m[2]}`;
+  report('ok', `対象 repo: ${ghRepoSlug}`);
+
+  // delete_branch_on_merge
+  const repoSettings = tryExec(
+    `gh api repos/${ghRepoSlug} --jq '.delete_branch_on_merge'`
+  );
+  if (repoSettings === 'false') {
+    report('ok', 'delete_branch_on_merge: false (develop が削除されない)');
+  } else if (repoSettings === 'true') {
+    report(
+      'fail',
+      'delete_branch_on_merge: true (develop が PR マージ時に削除される)',
+      `gh api -X PATCH repos/${ghRepoSlug} -F delete_branch_on_merge=false`
+    );
+  } else {
+    report('skip', `delete_branch_on_merge 取得失敗`);
+  }
+
+  // Repo-level secrets
+  const repoSecretsJson = tryExec(
+    `gh secret list --json name --jq '[.[] | .name]'`,
+    { cwd: REPO_ROOT }
+  );
+  let repoSecrets = [];
+  try {
+    repoSecrets = JSON.parse(repoSecretsJson || '[]');
+  } catch {}
+  for (const key of REQUIRED_REPO_SECRETS) {
+    if (repoSecrets.includes(key)) {
+      report('ok', `repo secret: ${key}`);
+    } else {
+      report(
+        'fail',
+        `repo secret 未設定: ${key}`,
+        `gh secret set ${key}\n値の中身は docs/setup.md M1-M2 参照`
+      );
+    }
+  }
+
+  // Environments
+  const envListJson = tryExec(
+    `gh api repos/${ghRepoSlug}/environments --jq '[.environments[].name]'`
+  );
+  let envList = [];
+  try {
+    envList = JSON.parse(envListJson || '[]');
+  } catch {}
+
+  for (const envName of ['staging', 'production']) {
+    if (!envList.includes(envName)) {
+      report(
+        'fail',
+        `Environment "${envName}" が存在しない`,
+        `GitHub Web UI: Settings → Environments → New environment "${envName}"`
+      );
+      continue;
+    }
+    report('ok', `Environment "${envName}" 存在`);
+
+    // production の Required reviewers
+    if (envName === 'production') {
+      const protectionJson = tryExec(
+        `gh api repos/${ghRepoSlug}/environments/production --jq '.protection_rules'`
+      );
+      try {
+        const rules = JSON.parse(protectionJson || '[]');
+        const reqRev = rules.find((r) => r.type === 'required_reviewers');
+        if (reqRev && reqRev.reviewers?.length > 0) {
+          const names = reqRev.reviewers
+            .map((r) => r.reviewer?.login || r.reviewer?.name || 'unknown')
+            .join(', ');
+          report('ok', `production: Required reviewers (${names})`);
+        } else {
+          report(
+            'fail',
+            'production env に Required reviewers が未設定',
+            `GitHub Web UI: Settings → Environments → production → Deployment protection rules\nRequired reviewers を ON + 自分を 1 名以上追加`
+          );
+        }
+      } catch {
+        report('skip', 'production の protection rules 取得失敗');
+      }
+    }
+
+    // Env secrets
+    const envSecretsJson = tryExec(
+      `gh secret list --env ${envName} --json name --jq '[.[] | .name]'`,
+      { cwd: REPO_ROOT }
+    );
+    let envSecrets = [];
+    try {
+      envSecrets = JSON.parse(envSecretsJson || '[]');
+    } catch {}
+    for (const key of REQUIRED_ENV_SECRETS) {
+      if (envSecrets.includes(key)) {
+        report('ok', `env "${envName}" secret: ${key}`);
+      } else {
+        report(
+          'fail',
+          `env "${envName}" secret 未設定: ${key}`,
+          `gh secret set ${key} --env ${envName}`
+        );
+      }
+    }
+  }
+}
+
+// ============================================================================
+// Section 8/9: Staging / Production Worker (--maintainer)
+// ============================================================================
+function checkDeployedWorker(envName, configFile) {
+  const workerName = envName === 'staging' ? 'typedcode-api-staging' : 'typedcode-api';
+  section(`${envName === 'staging' ? '8' : '9'}. ${envName} Worker (--maintainer)`);
+
+  if (!MAINTAINER) {
+    report('skip', `--maintainer を付けると ${envName} Worker もチェック`);
+    return;
+  }
+  if (!state.hasWrangler || !state.isCloudflareAuthed) {
+    report('skip', 'wrangler 未認証のため判定スキップ');
+    return;
+  }
+
+  // 設定ファイル存在
+  const config = readFileOrNull(`packages/workers/${configFile}`);
+  if (!config) {
+    report(
+      'fail',
+      `packages/workers/${configFile} が存在しない`,
+      `git checkout が壊れているか、ブランチを確認`
+    );
+    return;
+  }
+
+  // KV ID が placeholder でないか
+  if (config.includes('REPLACE_WITH_')) {
+    report(
+      'fail',
+      `${configFile} の KV ID が placeholder`,
+      `npx wrangler kv namespace create CHECKPOINT_SESSIONS_${envName.toUpperCase()}\n出力された id を ${configFile} の id = "REPLACE_WITH_..." に貼り付け commit`
+    );
+  } else {
+    const kvIds = [...config.matchAll(/id\s*=\s*"([0-9a-f]{32})"/gi)].map((m) => m[1]);
+    if (kvIds.length === 0) {
+      report('warn', `${configFile}: 32-hex KV ID が見つからない`);
+    } else {
+      report('ok', `${configFile}: KV ID 設定済 (${kvIds[0].slice(0, 10)}...)`);
+    }
+  }
+
+  // Worker がデプロイされているか
+  // wrangler deployments list は古い順に並ぶので、最後の Created を最新と扱う
+  const deployment = spawnSync(
+    'npx',
+    ['--no-install', 'wrangler', 'deployments', 'list', '--name', workerName],
+    { encoding: 'utf-8', cwd: resolve(REPO_ROOT, 'packages/workers') }
+  );
+  if (deployment.status === 0 && /Created:/.test(deployment.stdout)) {
+    const allCreated = [...deployment.stdout.matchAll(/^Created:\s+(\S+)/gm)];
+    const latest = allCreated[allCreated.length - 1]?.[1] ?? '?';
+    report('ok', `${workerName} デプロイ済 (最終: ${latest})`);
+  } else {
+    report(
+      'warn',
+      `${workerName} がまだデプロイされていない`,
+      `${envName === 'staging' ? 'develop' : 'main'} ブランチに push すると CI が自動デプロイ`
+    );
+  }
+
+  // Worker secrets 4 件
+  const secrets = spawnSync(
+    'npx',
+    ['--no-install', 'wrangler', 'secret', 'list', '--config', configFile],
+    { encoding: 'utf-8', cwd: resolve(REPO_ROOT, 'packages/workers') }
+  );
+  if (secrets.status === 0) {
+    let names = [];
+    try {
+      names = JSON.parse(secrets.stdout).map((s) => s.name);
+    } catch {}
+    for (const key of REQUIRED_WORKER_SECRETS) {
+      if (names.includes(key)) {
+        report('ok', `${workerName} secret: ${key}`);
+      } else {
+        report(
+          'fail',
+          `${workerName} secret 未設定: ${key}`,
+          `cd packages/workers\nnpx wrangler secret put ${key} --config ${configFile}`
+        );
+      }
+    }
+  } else {
+    report('skip', `${workerName} の secret 一覧取得失敗 (未デプロイ時は wrangler でも fail)`);
+  }
+}
+
+// ============================================================================
+// Section 10: Cloudflare Pages project (--maintainer)
+// ============================================================================
+function checkPagesProject() {
+  section('10. Cloudflare Pages project (--maintainer)');
+  if (!MAINTAINER) {
+    report('skip', '--maintainer を付けると Pages プロジェクトもチェック');
+    return;
+  }
+  if (!state.hasWrangler || !state.isCloudflareAuthed) {
+    report('skip', 'wrangler 未認証のため判定スキップ');
+    return;
+  }
+
+  // CLOUDFLARE_PROJECT_NAME は repo secret (中身は読めない) なので、Pages
+  // プロジェクトが少なくとも 1 つ存在することだけ確認する。
+  const list = spawnSync('npx', ['--no-install', 'wrangler', 'pages', 'project', 'list'], {
+    encoding: 'utf-8',
+    cwd: resolve(REPO_ROOT, 'packages/workers'),
+  });
+  if (list.status === 0) {
+    const projectNames = [
+      ...list.stdout.matchAll(/^│\s+(\S[\w-]+)\s+│/gm),
+    ].map((m) => m[1]);
+    if (projectNames.length === 0) {
+      report(
+        'fail',
+        'Cloudflare Pages プロジェクトがアカウントに 1 つもない',
+        `dashboard で作成: https://dash.cloudflare.com → Workers & Pages → Create application → Pages\nまたは: npx wrangler pages project create <name>\n作成後、その名前を CLOUDFLARE_PROJECT_NAME secret に設定`
+      );
+    } else {
+      report(
+        'ok',
+        `Pages プロジェクトが ${projectNames.length} 件存在: ${projectNames.join(', ')}`,
+        `repo secret CLOUDFLARE_PROJECT_NAME が上記いずれかと一致していることを目視確認してください`
+      );
+    }
+  } else {
+    report('skip', 'wrangler pages project list が失敗');
+  }
+}
+
+// ============================================================================
 // 実行
 // ============================================================================
 console.log(`${C.bold}TypedCode setup doctor${C.reset} ${C.dim}(${REPO_ROOT})${C.reset}`);
 if (STRICT) console.log(`${C.dim}strict mode: warnings も blocking 扱い${C.reset}`);
+if (MAINTAINER) console.log(`${C.dim}maintainer mode: GitHub + staging + production もチェック${C.reset}`);
 
 checkBasicTooling();
 checkWorkspace();
@@ -468,6 +765,10 @@ checkCloudflareAccount();
 checkLocalConfig();
 checkSigningKey();
 checkCloudflareResources();
+checkGitHubSetup();
+checkDeployedWorker('staging', 'wrangler.staging.toml');
+checkDeployedWorker('production', 'wrangler.production.toml');
+checkPagesProject();
 
 // ----- 結果サマリ -----
 console.log('');
