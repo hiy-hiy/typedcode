@@ -50,6 +50,10 @@ const SESSION_TTL_SECONDS = 7 * 24 * 3600;
 /** 1 セッションあたり許容する最大 checkpoint 数 (DoS 防御の最後の砦) */
 const SESSION_MAX_CHECKPOINTS = 50_000;
 
+/** 署名リクエスト body の最大サイズ (bytes)。固定スキーマの cp 1 件は ~1KB 程度。
+ *  署名 API なので余裕を見つつ上限を設けて巨大 body をパース前に弾く。 */
+const MAX_BODY_BYTES = 8 * 1024;
+
 interface CorsResponder {
   cors(extraHeaders?: Record<string, string>): HeadersInit;
 }
@@ -114,6 +118,16 @@ export async function handleSignCheckpoint(
   env: CheckpointEnv,
   responder: CorsResponder
 ): Promise<Response> {
+  // body サイズ上限: Content-Length があればパース前に弾く (巨大 body の DoS 対策)
+  const contentLength = Number(request.headers.get('Content-Length') ?? '');
+  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+    return jsonResponse(
+      { error: `Request body exceeds ${MAX_BODY_BYTES} bytes`, code: 'SCHEMA_INVALID' } satisfies ErrorBody,
+      400,
+      responder.cors()
+    );
+  }
+
   let parsed: unknown;
   try {
     parsed = await request.json();

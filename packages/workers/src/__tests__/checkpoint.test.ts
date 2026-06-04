@@ -226,6 +226,29 @@ describe('handleSignCheckpoint', () => {
     expect(body.code).toBe('SCHEMA_INVALID');
   });
 
+  it('returns SCHEMA_INVALID for a non-hex chainHash', async () => {
+    const res = await handleSignCheckpoint(
+      makeRequest(makeInput({ chainHash: 'not-a-valid-sha256' })),
+      env,
+      responder
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrorResponseBody;
+    expect(body.code).toBe('SCHEMA_INVALID');
+  });
+
+  it('returns SCHEMA_INVALID when Content-Length exceeds the body size limit', async () => {
+    const req = new Request('https://workers.test/api/checkpoint/sign', {
+      method: 'POST',
+      body: JSON.stringify(makeInput()),
+      headers: { 'Content-Type': 'application/json', 'Content-Length': String(8 * 1024 + 1) },
+    });
+    const res = await handleSignCheckpoint(req, env, responder);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrorResponseBody;
+    expect(body.code).toBe('SCHEMA_INVALID');
+  });
+
   it('returns SESSION_LIMIT_EXCEEDED when signedCount is at cap', async () => {
     // signedCount を上限に達した状態で事前注入
     kv.store.set(
