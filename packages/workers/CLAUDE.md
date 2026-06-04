@@ -53,6 +53,7 @@ src/
 | `SIGNING_KEY_NOT_CONFIGURED` | 500 | `CHECKPOINT_SIGNING_KEY_*` 未設定 |
 | `SIGNING_KEY_UNKNOWN` | 500 | `keyId` がレジストリに存在しない |
 | `SIGNING_ERROR` | 500 | 署名計算で予期しない失敗 |
+| `SESSION_PERSIST_FAILED` | 503 | **初回** checkpoint の KV 書き込み失敗。`firstSeenAt` が固定されないため署名済み envelope は返さずクライアントにリトライさせる (2 回目以降の書き込み失敗は best-effort で 200) |
 
 ## KV ネームスペース
 

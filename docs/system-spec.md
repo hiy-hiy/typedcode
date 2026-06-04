@@ -241,7 +241,7 @@ interface CheckpointData {
 5. signedCount セッション上限チェック (50,000)
 6. `payload = { ...input, serverTimestamp: now, firstSeenAt, poswIterations: 10000, version: 1 }` を構築
 7. `signature = ECDSA-P256.sign(privateKey, deterministicStringify(payload))`
-8. KV 更新 (TTL **7 日**)
+8. KV 更新 (TTL **7 日**)。**初回 checkpoint は永続化を成功条件とする**: 書き込みに失敗したら `firstSeenAt` が固定されないため、署名済み envelope を返さず `503 SESSION_PERSIST_FAILED` でリトライさせる (2 回目以降は `firstSeenAt` が確定済みなので best-effort)
 9. envelope を返却
 
 **Envelope 形式**:

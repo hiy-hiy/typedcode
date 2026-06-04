@@ -63,7 +63,8 @@ interface ErrorBody {
     | 'SESSION_LIMIT_EXCEEDED'
     | 'SIGNING_KEY_NOT_CONFIGURED'
     | 'SIGNING_KEY_UNKNOWN'
-    | 'SIGNING_ERROR';
+    | 'SIGNING_ERROR'
+    | 'SESSION_PERSIST_FAILED';
 }
 
 function jsonResponse(
@@ -151,6 +152,10 @@ export async function handleSignCheckpoint(
   const sessionKey = `session:${input.sessionId}`;
   const existing = await env.CHECKPOINT_SESSIONS.get<SessionRecord>(sessionKey, 'json');
 
+  // このセッションで初めて署名する checkpoint か。初回は firstSeenAt が
+  // まだ KV に固定されていないため、KV 永続化を「成功条件」として扱う必要がある。
+  const isFirstCheckpoint = !existing;
+
   const nowIso = new Date().toISOString();
   const firstSeenAt = existing?.firstSeenAt ?? nowIso;
 
@@ -229,8 +234,23 @@ export async function handleSignCheckpoint(
       expirationTtl: SESSION_TTL_SECONDS,
     });
   } catch {
-    // KV 書き込み失敗は致命的ではない (次回書き込みで状態追従)。
-    // 署名は既に出ているのでクライアントに返す。
+    if (isFirstCheckpoint) {
+      // 初回書き込みの失敗は致命的: firstSeenAt がまだ KV 上に固定されていない。
+      // ここで envelope を返してしまうと、次回リクエスト時に existing が依然 null と
+      // なり、別の firstSeenAt が確定する。verifier はすべての envelope で firstSeenAt
+      // の一致を要求するため、これは proof 全体の検証失敗につながる。
+      // よって署名済み envelope は破棄し、クライアントにリトライさせる。
+      return jsonResponse(
+        {
+          error: 'Failed to persist initial session state; retry the signing request',
+          code: 'SESSION_PERSIST_FAILED',
+        } satisfies ErrorBody,
+        503,
+        responder.cors()
+      );
+    }
+    // 2 回目以降は firstSeenAt が既に KV 上で確定済みなので best-effort で良い
+    // (失敗しても次回の書き込みで lastCheckpointIndex / lastEnvelope が追従する)。
   }
 
   return jsonResponse({ envelope }, 200, responder.cors());
