@@ -575,7 +575,9 @@ typedcode-verify my-code.zip --mode audit    # 将来用 (現状 full と同等)
 - [packages/shared/README.md](../packages/shared/README.md) — shared API リファレンス
 - [packages/verify/README.md](../packages/verify/README.md) — 検証 UI の使い方
 - [packages/verify-cli/README.md](../packages/verify-cli/README.md) — CLI 検証ツール
-- [CLAUDE.md](../CLAUDE.md) — Claude Code 用プロジェクト概要
+- [CLAUDE.md](../CLAUDE.md) — リポジトリ全体の玄関口 (Claude Code / Agent SDK 用)
+- [packages/*/CLAUDE.md](../packages/) — 各サブシステムの責務 / 不変条件 / 罠
+- [docs/adr/](adr/) — Architecture Decision Records (なぜそうしたかの蓄積)
 
 ---
 
