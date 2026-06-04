@@ -20,6 +20,9 @@ compatibility_date = "2025-12-26"
 
 [vars]
 ENVIRONMENT = "staging"
+# CORS 許可オリジン (カンマ区切り)。staging の editor / verify アプリのドメインを指定する。
+# 未設定だと後方互換で任意 Origin を reflect する。例:
+# ALLOWED_ORIGINS = "https://develop.typedcode.pages.dev"
 
 [[kv_namespaces]]
 binding = "CHECKPOINT_SESSIONS"

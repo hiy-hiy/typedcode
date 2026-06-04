@@ -13,7 +13,15 @@ interface Env extends CheckpointEnv {
   TURNSTILE_SECRET_KEY: string;
   ATTESTATION_SECRET_KEY: string; // 証明書署名用の秘密鍵
   ENVIRONMENT: string;
+  /**
+   * CORS 許可オリジン (カンマ区切り)。例: "https://app.example.com,https://verify.example.com"。
+   * production / staging では設定必須 (未設定だと後方互換で任意 Origin を reflect する)。
+   */
+  ALLOWED_ORIGINS?: string;
 }
+
+/** CORS の許可判定に必要な env の最小サブセット */
+type CorsEnv = Pick<Env, 'ALLOWED_ORIGINS' | 'ENVIRONMENT'>;
 
 interface TurnstileResponse {
   success: boolean;
@@ -43,34 +51,74 @@ interface VerifyResponse {
   attestation?: HumanAttestation; // 検証成功時のみ
 }
 
+/** ALLOWED_ORIGINS (カンマ区切り) を正規化した配列にする */
+function parseAllowedOrigins(env: CorsEnv): string[] {
+  return (env.ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map(o => o.trim())
+    .filter(o => o.length > 0);
+}
+
+function isLocalhostOrigin(origin: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+}
+
 /**
- * CORSヘッダーを返す
+ * リクエスト Origin を許可リストに照合し、許可するときのみその Origin を返す。
+ * 返り値を `Access-Control-Allow-Origin` にそのまま入れる (reflect)。許可しないときは null。
+ *
+ * 優先順位:
+ *  1. `ALLOWED_ORIGINS` に完全一致 → 許可
+ *  2. `ENVIRONMENT === 'development'` のとき localhost / 127.0.0.1 → 許可 (開発体験)
+ *  3. `ALLOWED_ORIGINS` 未設定 → 後方互換で reflect (デプロイ破壊回避。production では設定必須)
+ *  4. それ以外 → 拒否 (ヘッダを付与しない)
+ *
+ * なお CORS はブラウザのクロスオリジン**読み取り**のみを制限するもので、
+ * サーバ間アクセス (curl 等) は防げない。署名 API の濫用は per-session 上限
+ * (`SESSION_MAX_CHECKPOINTS`) と Cloudflare 側の rate limit で防ぐ。
  */
-function corsHeaders(origin: string | null): HeadersInit {
-  return {
-    'Access-Control-Allow-Origin': origin ?? '*',
+function resolveCorsOrigin(origin: string | null, env: CorsEnv): string | null {
+  if (!origin) return null;
+  const allowed = parseAllowedOrigins(env);
+  if (allowed.includes(origin)) return origin;
+  if (env.ENVIRONMENT === 'development' && isLocalhostOrigin(origin)) return origin;
+  if (allowed.length === 0) return origin; // 未設定時のみ後方互換 reflect
+  return null;
+}
+
+/**
+ * CORSヘッダーを返す。許可されない Origin には `Access-Control-Allow-Origin` を付けない。
+ */
+function corsHeaders(origin: string | null, env: CorsEnv): HeadersInit {
+  const allowOrigin = resolveCorsOrigin(origin, env);
+  const headers: Record<string, string> = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
+    Vary: 'Origin',
   };
+  if (allowOrigin) {
+    headers['Access-Control-Allow-Origin'] = allowOrigin;
+  }
+  return headers;
 }
 
 /**
  * CORS preflight リクエストを処理
  */
-function handleCORS(request: Request): Response {
+function handleCORS(request: Request, env: CorsEnv): Response {
   const origin = request.headers.get('Origin');
   return new Response(null, {
     status: 204,
-    headers: corsHeaders(origin),
+    headers: corsHeaders(origin, env),
   });
 }
 
 /** /api/checkpoint/* で使う CORS レスポンダ */
-function checkpointResponder(origin: string | null): { cors(extra?: Record<string, string>): HeadersInit } {
+function checkpointResponder(origin: string | null, env: CorsEnv): { cors(extra?: Record<string, string>): HeadersInit } {
   return {
     cors(extra: Record<string, string> = {}) {
-      return { ...corsHeaders(origin), ...extra };
+      return { ...corsHeaders(origin, env), ...extra };
     },
   };
 }
@@ -184,7 +232,7 @@ async function handleVerifyCaptcha(
           status: 400,
           headers: {
             'Content-Type': 'application/json',
-            ...corsHeaders(origin),
+            ...corsHeaders(origin, env),
           },
         }
       );
@@ -212,7 +260,7 @@ async function handleVerifyCaptcha(
       status: response.success ? 200 : 403,
       headers: {
         'Content-Type': 'application/json',
-        ...corsHeaders(origin),
+        ...corsHeaders(origin, env),
       },
     });
   } catch (error) {
@@ -226,7 +274,7 @@ async function handleVerifyCaptcha(
         status: 500,
         headers: {
           'Content-Type': 'application/json',
-          ...corsHeaders(origin),
+          ...corsHeaders(origin, env),
         },
       }
     );
@@ -261,7 +309,7 @@ async function handleVerifyAttestation(
           status: 400,
           headers: {
             'Content-Type': 'application/json',
-            ...corsHeaders(origin),
+            ...corsHeaders(origin, env),
           },
         }
       );
@@ -292,7 +340,7 @@ async function handleVerifyAttestation(
         status: 200,
         headers: {
           'Content-Type': 'application/json',
-          ...corsHeaders(origin),
+          ...corsHeaders(origin, env),
         },
       }
     );
@@ -303,7 +351,7 @@ async function handleVerifyAttestation(
         status: 500,
         headers: {
           'Content-Type': 'application/json',
-          ...corsHeaders(origin),
+          ...corsHeaders(origin, env),
         },
       }
     );
@@ -316,7 +364,7 @@ export default {
 
     // CORS preflight
     if (request.method === 'OPTIONS') {
-      return handleCORS(request);
+      return handleCORS(request, env);
     }
 
     // ルーティング
@@ -332,11 +380,11 @@ export default {
     // Signed checkpoint endpoints
     if (url.pathname === '/api/checkpoint/sign' && request.method === 'POST') {
       const origin = request.headers.get('Origin');
-      return handleSignCheckpoint(request, env, checkpointResponder(origin));
+      return handleSignCheckpoint(request, env, checkpointResponder(origin, env));
     }
     if (url.pathname === '/api/checkpoint/public-keys' && request.method === 'GET') {
       const origin = request.headers.get('Origin');
-      return handlePublicKeys(checkpointResponder(origin));
+      return handlePublicKeys(checkpointResponder(origin, env));
     }
 
     // ヘルスチェック
