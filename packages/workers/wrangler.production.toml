@@ -21,6 +21,10 @@ compatibility_date = "2025-12-26"
 
 [vars]
 ENVIRONMENT = "production"
+# CORS 許可オリジン (カンマ区切り)。editor / verify は同一 Pages プロジェクト
+# (editor=/, verify=/verify) なので origin は 1 つ。カスタムドメインと既定の
+# pages.dev の両方を許可する。シークレットではない公開ドメインなので直接 commit してよい。
+ALLOWED_ORIGINS = "https://typedcode.dev,https://typedcode.pages.dev"
 
 [[kv_namespaces]]
 binding = "CHECKPOINT_SESSIONS"

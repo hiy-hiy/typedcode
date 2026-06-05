@@ -89,6 +89,34 @@ describe('validateSignedCheckpointInput', () => {
     expect(validateSignedCheckpointInput(42).ok).toBe(false);
     expect(validateSignedCheckpointInput('string').ok).toBe(false);
   });
+
+  it('rejects non-hex chainHash (must be 64-char SHA-256)', () => {
+    const r = validateSignedCheckpointInput({ ...baseInputRaw, chainHash: 'not-a-hash' });
+    expect(r.ok).toBe(false);
+  });
+
+  it('rejects too-short contentHash', () => {
+    const r = validateSignedCheckpointInput({ ...baseInputRaw, contentHash: 'a'.repeat(63) });
+    expect(r.ok).toBe(false);
+  });
+
+  it('rejects uppercase hex initialEventChainHash', () => {
+    const r = validateSignedCheckpointInput({ ...baseInputRaw, initialEventChainHash: 'A'.repeat(64) });
+    expect(r.ok).toBe(false);
+  });
+
+  it('rejects an over-long sessionId', () => {
+    const r = validateSignedCheckpointInput({ ...baseInputRaw, sessionId: 'x'.repeat(201) });
+    expect(r.ok).toBe(false);
+  });
+
+  it('rejects an over-long clientTimestamp even if Date.parse would tolerate it', () => {
+    const r = validateSignedCheckpointInput({
+      ...baseInputRaw,
+      clientTimestamp: `2026-05-28T12:00:00.000Z${' '.repeat(40)}`,
+    });
+    expect(r.ok).toBe(false);
+  });
 });
 
 describe('createSignedCheckpointEnvelope', () => {

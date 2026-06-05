@@ -37,6 +37,7 @@ import {
   SignedCheckpointService,
   createSignedCheckpointServiceIfEnabled,
 } from '../../services/SignedCheckpointService.js';
+import { debugLog } from '../../utils/logger.js';
 
 // PoSW Workerのファクトリ関数
 // Viteがsymlinkedパッケージ内のWorkerを正しく解決できないため、editorパッケージ内から読み込む
@@ -115,6 +116,9 @@ export class TabManager {
   private tabOrder: string[] = [];
   private activeTabId: string | null = null;
   private tabSwitches: TabSwitchEvent[] = [];
+  /** 復元中フラグ。復元時に switchTab が発火する合成スイッチイベントを
+   *  IndexedDB に二重永続化しないために使う。 */
+  private isRestoring = false;
   private fingerprint: string | null = null;
   private fingerprintComponents: FingerprintComponents | null = null;
   private editor: monaco.editor.IStandaloneCodeEditor;
@@ -160,7 +164,7 @@ export class TabManager {
 
     // タブがない場合はウェルカム画面を表示するため、デフォルトタブは作成しない
     // 認証はユーザーが新規ファイル作成またはテンプレート読み込みを選択したタイミングで実行
-    console.log('[TabManager] initialize() completed, tabs.size:', this.tabs.size);
+    debugLog('[TabManager] initialize() completed, tabs.size:', this.tabs.size);
     return true;
   }
 
@@ -171,7 +175,7 @@ export class TabManager {
     for (const key of OLD_STORAGE_KEYS) {
       if (localStorage.getItem(key) !== null) {
         localStorage.removeItem(key);
-        console.log(`[TabManager] Removed old storage key: ${key}`);
+        debugLog(`[TabManager] Removed old storage key: ${key}`);
       }
     }
   }
@@ -271,7 +275,7 @@ export class TabManager {
 
     // Turnstile認証（skipAttestationでない場合のみ）
     if (!options?.skipAttestation && isTurnstileConfigured()) {
-      console.log('[TabManager] Performing Turnstile verification for new tab...');
+      debugLog('[TabManager] Performing Turnstile verification for new tab...');
 
       const uiResult = await performVerificationWithUI('create_tab', t);
 
@@ -496,6 +500,12 @@ export class TabManager {
         toFilename: tab.filename
       };
       this.tabSwitches.push(switchEvent);
+      // sessionStorage は saveToStorage() 経由で保存されるが、IndexedDB には
+      // 別途 append しないと sessionStorage が消えた復旧で履歴が失われる。
+      // 復元中の合成スイッチ (isRestoring) は二重保存になるので除外。
+      if (!this.isRestoring) {
+        void this.persistTabSwitch(switchEvent);
+      }
     }
 
     this.activeTabId = tabId;
@@ -591,6 +601,21 @@ export class TabManager {
   }
 
   /**
+   * タブ切り替えイベントを IndexedDB に永続化する (fire-and-forget)。
+   * sessionStorage が消えた状態 (タブを閉じた後など) からの復旧で履歴を
+   * 失わないために必要。UI をブロックしないよう await せず、失敗はログのみ。
+   * @private
+   */
+  private async persistTabSwitch(switchEvent: TabSwitchEvent): Promise<void> {
+    if (!this.sessionService.isInitialized()) return;
+    try {
+      await this.sessionService.saveTabSwitch(switchEvent);
+    } catch (e) {
+      console.error('[TabManager] Failed to persist tab switch to IndexedDB:', e);
+    }
+  }
+
+  /**
    * タブの順序を変更
    * @param fromIndex 移動元インデックス
    * @param toIndex 移動先インデックス
@@ -625,7 +650,7 @@ export class TabManager {
    * IndexedDBとの整合性はリロード時にsessionStorageを優先して復元することで保証。
    */
   saveToStorageSync(): void {
-    console.log('[TabManager] saveToStorageSync called');
+    debugLog('[TabManager] saveToStorageSync called');
 
     // デバウンスタイマーがあればキャンセル
     if (this.saveDebounceTimer) {
@@ -639,7 +664,7 @@ export class TabManager {
     // needsSaveをクリア（この保存で最新状態が保存された）
     this.needsSave = false;
 
-    console.log('[TabManager] saveToStorageSync complete');
+    debugLog('[TabManager] saveToStorageSync complete');
   }
 
   /**
@@ -806,7 +831,7 @@ export class TabManager {
       }
 
       if (newEventsCount > 0) {
-        console.log(`[TabManager] SAVE: Tab ${id}: saved ${newEventsCount} new events (total: ${proofState.events.length})`);
+        debugLog(`[TabManager] SAVE: Tab ${id}: saved ${newEventsCount} new events (total: ${proofState.events.length})`);
       }
 
       const tabData: StoredTabData = {
@@ -845,7 +870,7 @@ export class TabManager {
    * 4. 最新の状態を確実にIndexedDBに保存
    */
   async flushToIndexedDB(): Promise<void> {
-    console.log('[TabManager] Flushing to IndexedDB...');
+    debugLog('[TabManager] Flushing to IndexedDB...');
 
     // 1. デバウンスタイマーがあればキャンセル（即座に保存するため）
     if (this.saveDebounceTimer) {
@@ -855,20 +880,20 @@ export class TabManager {
 
     // 2. 現在実行中の保存処理があれば完了を待機
     if (this.currentSavePromise) {
-      console.log('[TabManager] Waiting for current save to complete...');
+      debugLog('[TabManager] Waiting for current save to complete...');
       await this.currentSavePromise;
     }
 
     // 3. needsSaveがtrue（デバウンス中に変更があった）、または
     //    念のため最新状態を保存
-    console.log('[TabManager] Saving latest state to IndexedDB...');
+    debugLog('[TabManager] Saving latest state to IndexedDB...');
     await this.saveToIndexedDB();
     this.saveToSessionStorage();
 
     // needsSaveをクリア
     this.needsSave = false;
 
-    console.log('[TabManager] IndexedDB flush complete');
+    debugLog('[TabManager] IndexedDB flush complete');
   }
 
   /**
@@ -881,10 +906,10 @@ export class TabManager {
       const data = sessionStorage.getItem(STORAGE_KEY);
       if (!data) {
         // sessionStorageが空の場合、IndexedDBからのフォールバックを試みる
-        console.log('[TabManager] sessionStorage is empty, trying IndexedDB fallback');
+        debugLog('[TabManager] sessionStorage is empty, trying IndexedDB fallback');
         const sessionId = this.sessionService.getCurrentSessionId();
         if (sessionId && this.fingerprint && this.fingerprintComponents) {
-          console.log('[TabManager] Falling back to IndexedDB, sessionId:', sessionId);
+          debugLog('[TabManager] Falling back to IndexedDB, sessionId:', sessionId);
           return await this.loadFromIndexedDB(sessionId, this.fingerprint, this.fingerprintComponents);
         }
         return false;
@@ -896,11 +921,11 @@ export class TabManager {
       // バージョン別に処理を分岐
       if (rawStorage.version === 1) {
         // V1: 従来形式（eventsあり）→ そのまま読み込み、次回保存でV2に移行
-        console.log('[TabManager] Loading V1 format (will migrate to V2 on next save)');
+        debugLog('[TabManager] Loading V1 format (will migrate to V2 on next save)');
         return await this.loadFromStorageV1(rawStorage);
       } else if (rawStorage.version === 2) {
         // V2: 軽量形式（eventsなし）→ IndexedDBからevents取得
-        console.log('[TabManager] Loading V2 format (lightweight)');
+        debugLog('[TabManager] Loading V2 format (lightweight)');
         return await this.loadFromStorageV2(rawStorage);
       } else {
         console.warn(`[TabManager] Unknown storage version: ${rawStorage.version}`);
@@ -977,15 +1002,20 @@ export class TabManager {
     // タブ切り替え履歴を復元
     this.tabSwitches = rawStorage.tabSwitches ?? [];
 
-    // アクティブタブを復元
-    if (rawStorage.activeTabId && this.tabs.has(rawStorage.activeTabId)) {
-      await this.switchTab(rawStorage.activeTabId);
-    } else if (this.tabs.size > 0) {
-      const firstTabId = Array.from(this.tabs.keys())[0]!;
-      await this.switchTab(firstTabId);
+    // アクティブタブを復元 (復元中フラグ: 合成スイッチを IndexedDB に再保存しない)
+    this.isRestoring = true;
+    try {
+      if (rawStorage.activeTabId && this.tabs.has(rawStorage.activeTabId)) {
+        await this.switchTab(rawStorage.activeTabId);
+      } else if (this.tabs.size > 0) {
+        const firstTabId = Array.from(this.tabs.keys())[0]!;
+        await this.switchTab(firstTabId);
+      }
+    } finally {
+      this.isRestoring = false;
     }
 
-    console.log('[TabManager] V1 format loaded, will migrate to V2 on next save');
+    debugLog('[TabManager] V1 format loaded, will migrate to V2 on next save');
     return true;
   }
 
@@ -1018,7 +1048,7 @@ export class TabManager {
           }
         }
       }
-      console.log(`[TabManager] Tab ${id}: loaded ${events.length} events from IndexedDB`);
+      debugLog(`[TabManager] Tab ${id}: loaded ${events.length} events from IndexedDB`);
 
       // 2. 同期確認と currentHash の決定
       // IMPORTANT: sessionStorageのcurrentHashではなく、IndexedDBから取得したイベントの
@@ -1093,12 +1123,17 @@ export class TabManager {
     // タブ切り替え履歴を復元
     this.tabSwitches = storage.tabSwitches ?? [];
 
-    // アクティブタブを復元
-    if (storage.activeTabId && this.tabs.has(storage.activeTabId)) {
-      await this.switchTab(storage.activeTabId);
-    } else if (this.tabs.size > 0) {
-      const firstTabId = Array.from(this.tabs.keys())[0]!;
-      await this.switchTab(firstTabId);
+    // アクティブタブを復元 (復元中フラグ: 合成スイッチを IndexedDB に再保存しない)
+    this.isRestoring = true;
+    try {
+      if (storage.activeTabId && this.tabs.has(storage.activeTabId)) {
+        await this.switchTab(storage.activeTabId);
+      } else if (this.tabs.size > 0) {
+        const firstTabId = Array.from(this.tabs.keys())[0]!;
+        await this.switchTab(firstTabId);
+      }
+    } finally {
+      this.isRestoring = false;
     }
 
     return true;
@@ -1114,7 +1149,7 @@ export class TabManager {
     fingerprintComponents?: FingerprintComponents
   ): Promise<boolean> {
     try {
-      console.log('[TabManager] Loading from IndexedDB, sessionId:', sessionId);
+      debugLog('[TabManager] Loading from IndexedDB, sessionId:', sessionId);
 
       // fingerprint が引数として渡された場合は設定
       if (fingerprintHash && fingerprintComponents) {
@@ -1133,7 +1168,7 @@ export class TabManager {
 
       // タブデータを読み込み
       const storedTabs = await this.sessionService.loadTabs(sessionId);
-      console.log('[TabManager] Found tabs in IndexedDB:', storedTabs.length);
+      debugLog('[TabManager] Found tabs in IndexedDB:', storedTabs.length);
 
       if (storedTabs.length === 0) {
         return false;
@@ -1151,7 +1186,7 @@ export class TabManager {
 
         // イベントを読み込み
         const events = await this.sessionService.getEvents(tabId);
-        console.log(`[TabManager] Tab ${tabId}: ${events.length} events loaded`);
+        debugLog(`[TabManager] Tab ${tabId}: ${events.length} events loaded`);
 
         // TypingProofを復元
         const poswWorker = createPoswWorker();
@@ -1202,15 +1237,20 @@ export class TabManager {
       // タブ切り替え履歴を復元
       this.tabSwitches = await this.sessionService.getTabSwitches(sessionId);
 
-      // アクティブタブを復元
-      if (activeTabId && this.tabs.has(activeTabId)) {
-        await this.switchTab(activeTabId);
-      } else if (this.tabs.size > 0) {
-        const firstTabId = Array.from(this.tabs.keys())[0]!;
-        await this.switchTab(firstTabId);
+      // アクティブタブを復元 (復元中フラグ: 合成スイッチを IndexedDB に再保存しない)
+      this.isRestoring = true;
+      try {
+        if (activeTabId && this.tabs.has(activeTabId)) {
+          await this.switchTab(activeTabId);
+        } else if (this.tabs.size > 0) {
+          const firstTabId = Array.from(this.tabs.keys())[0]!;
+          await this.switchTab(firstTabId);
+        }
+      } finally {
+        this.isRestoring = false;
       }
 
-      console.log('[TabManager] Session restored from IndexedDB, tabs:', this.tabs.size);
+      debugLog('[TabManager] Session restored from IndexedDB, tabs:', this.tabs.size);
       return true;
     } catch (e) {
       console.error('[TabManager] Failed to load from IndexedDB:', e);

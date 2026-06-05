@@ -20,6 +20,11 @@ compatibility_date = "2025-12-26"
 
 [vars]
 ENVIRONMENT = "staging"
+# CORS 許可オリジン。staging Worker は develop デプロイ (develop.typedcode.pages.dev)
+# だけでなく PR プレビュー (<branch>.typedcode.pages.dev) からも叩かれる。
+# サブドメイン wildcard で自プロジェクト配下の pages.dev を許可する
+# (*.pages.dev のように広げないこと: 自プロジェクトの branch alias に限定される)。
+ALLOWED_ORIGINS = "https://*.typedcode.pages.dev"
 
 [[kv_namespaces]]
 binding = "CHECKPOINT_SESSIONS"

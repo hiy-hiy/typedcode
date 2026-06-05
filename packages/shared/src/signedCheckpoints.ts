@@ -38,6 +38,15 @@ const POST_HOC_RATIO_THRESHOLD = 0.1;
 const POST_HOC_MIN_SERVER_SPAN_MS = 60 * 1000;
 const POST_HOC_MIN_CLIENT_SPAN_MS = 10 * 60 * 1000;
 
+/** SHA-256 を hex 文字列で表したときの正規表現 (64 桁の小文字 hex) */
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+/** sessionId / tabId の許容最大長 (UUID 等で十分。署名 API の濫用対策) */
+const MAX_ID_LENGTH = 200;
+/** clientTimestamp (ISO 8601) の許容最大長 */
+const MAX_TIMESTAMP_LENGTH = 40;
+/** checkpointIndex / eventIndex / totalEventsSincePrevious の上限 (整数オーバーフロー/濫用対策) */
+const MAX_SAFE_COUNT = Number.MAX_SAFE_INTEGER;
+
 /**
  * Signed checkpoint 作成時に編集側 (またはサーバ側エンドポイント) が提供する入力。
  * `serverTimestamp` / `firstSeenAt` / `poswIterations` / `version` は
@@ -137,34 +146,47 @@ export function validateSignedCheckpointInput(
     return { ok: false, reason: 'Input must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const strFields = [
-    'sessionId',
-    'tabId',
-    'initialEventChainHash',
-    'chainHash',
-    'contentHash',
-    'clientTimestamp',
-  ] as const;
-  for (const k of strFields) {
-    if (typeof obj[k] !== 'string' || (obj[k] as string).length === 0) {
+
+  // sessionId / tabId: 任意のクライアント生成文字列だが、署名 API なので
+  // 非空かつ最大長で縛る (DoS / KV キー肥大化対策)。
+  for (const k of ['sessionId', 'tabId'] as const) {
+    const v = obj[k];
+    if (typeof v !== 'string' || v.length === 0) {
       return { ok: false, reason: `Missing or invalid ${k}` };
     }
+    if (v.length > MAX_ID_LENGTH) {
+      return { ok: false, reason: `${k} exceeds max length (${MAX_ID_LENGTH})` };
+    }
   }
+
+  // ハッシュ系フィールドは SHA-256 hex (64 桁) でなければならない。
+  // 「非空文字列」だけだと任意の値で署名 API を叩けてしまう。
+  for (const k of ['initialEventChainHash', 'chainHash', 'contentHash'] as const) {
+    if (typeof obj[k] !== 'string' || !SHA256_HEX.test(obj[k] as string)) {
+      return { ok: false, reason: `${k} must be a 64-char lowercase hex SHA-256` };
+    }
+  }
+
   const intFields = ['checkpointIndex', 'eventIndex', 'totalEventsSincePrevious'] as const;
   for (const k of intFields) {
     const v = obj[k];
-    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > MAX_SAFE_COUNT) {
       return { ok: false, reason: `Missing or invalid ${k}` };
     }
   }
   if (
     obj.previousSignedCheckpointHash !== null &&
     (typeof obj.previousSignedCheckpointHash !== 'string' ||
-      !/^[0-9a-f]{64}$/.test(obj.previousSignedCheckpointHash as string))
+      !SHA256_HEX.test(obj.previousSignedCheckpointHash as string))
   ) {
     return { ok: false, reason: 'previousSignedCheckpointHash must be null or 64-hex string' };
   }
-  if (Number.isNaN(Date.parse(obj.clientTimestamp as string))) {
+  if (
+    typeof obj.clientTimestamp !== 'string' ||
+    obj.clientTimestamp.length === 0 ||
+    obj.clientTimestamp.length > MAX_TIMESTAMP_LENGTH ||
+    Number.isNaN(Date.parse(obj.clientTimestamp))
+  ) {
     return { ok: false, reason: 'clientTimestamp must be a valid ISO date' };
   }
   return {
@@ -298,15 +320,31 @@ export async function verifyCheckpointSignature(
     return { valid: false, reason: resolved.reason };
   }
 
-  const signingInput = new TextEncoder().encode(deterministicStringify(envelope.payload));
-  const signatureBytes = hexToUint8Array(envelope.signature);
+  // signature が不正な hex (奇数長など) でも throw せず valid:false を返す。
+  // これがないと hexToUint8Array が throw し、verifyProofFile (CLI) のように
+  // 例外を握らない呼び出し側で検証全体がクラッシュする (Web worker は try/catch
+  // で握っており挙動が分かれていた)。ここで吸収して両経路の挙動を揃える。
+  let signatureBytes: Uint8Array;
+  try {
+    signatureBytes = hexToUint8Array(envelope.signature);
+  } catch {
+    return { valid: false, reason: 'Malformed signature hex', registryEntry: resolved.registryEntry };
+  }
 
-  const valid = await crypto.subtle.verify(
-    { name: 'ECDSA', hash: 'SHA-256' },
-    resolved.cryptoKey,
-    signatureBytes as unknown as ArrayBuffer,
-    signingInput as unknown as ArrayBuffer
-  );
+  const signingInput = new TextEncoder().encode(deterministicStringify(envelope.payload));
+
+  let valid = false;
+  try {
+    valid = await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      resolved.cryptoKey,
+      signatureBytes as unknown as ArrayBuffer,
+      signingInput as unknown as ArrayBuffer
+    );
+  } catch {
+    // 鍵長と signature 長の不整合などで verify 自体が throw するケースも吸収
+    return { valid: false, reason: 'Signature verification error', registryEntry: resolved.registryEntry };
+  }
 
   return { valid, registryEntry: resolved.registryEntry };
 }
