@@ -13,7 +13,7 @@
 2. **`CHECKPOINT_SIGNING_KEY_*` シークレット**: 本番では `wrangler secret put` で投入。秘密鍵を git に入れない
 3. **公開鍵レジストリは append-only**: `packages/shared/src/checkpointKeys/registry.ts`。失効は `status: 'revoked'` で表現し、削除しない
 4. **KV は eventually consistent**: 同一 key への高頻度書き込みは ~1 write/sec の制限あり。cp トリガが頻発しないよう shared 側がハイブリッドトリガを使う ([docs/adr/0001-hybrid-checkpoint-trigger.md](../../docs/adr/0001-hybrid-checkpoint-trigger.md))
-5. **CORS のオリジン**: 編集 / 検証アプリのドメインを許可。ワイルドカード禁止
+5. **CORS のオリジン**: 編集 / 検証アプリのドメインを許可。ワイルドカード禁止 (下記「CORS と濫用防止の設計」参照)
 6. **`sessionId` は信用しない**: クライアントが投げる任意の文字列。サーバ側で `firstSeenAt` を KV に保存し改ざんを防ぐ
 
 ## ファイル構成
@@ -53,12 +53,52 @@ src/
 | `SIGNING_KEY_NOT_CONFIGURED` | 500 | `CHECKPOINT_SIGNING_KEY_*` 未設定 |
 | `SIGNING_KEY_UNKNOWN` | 500 | `keyId` がレジストリに存在しない |
 | `SIGNING_ERROR` | 500 | 署名計算で予期しない失敗 |
+| `SESSION_PERSIST_FAILED` | 503 | **初回** checkpoint の KV 書き込み失敗。`firstSeenAt` が固定されないため署名済み envelope は返さずクライアントにリトライさせる (2 回目以降の書き込み失敗は best-effort で 200) |
+
+## CORS と濫用防止の設計
+
+CORS は `ALLOWED_ORIGINS` (env var, カンマ区切り) による**許可リスト方式**で実装する (`src/index.ts` の `resolveCorsOrigin`)。
+
+許可判定の優先順位 (**fail-closed**):
+
+1. `ALLOWED_ORIGINS` に一致 (**完全一致** or `https://*.domain` の**サブドメイン wildcard**) → その Origin を reflect
+2. `ENVIRONMENT === 'development'` のとき `localhost` / `127.0.0.1` → 自動許可 (DX)
+3. それ以外 → `Access-Control-Allow-Origin` を**付与しない** (ブラウザのクロスオリジン読み取りを拒否)
+
+ワイルドカード `*` は一切返さない (Origin 不在のリクエストにはヘッダ自体を付けない)。許可オリジンは `wrangler.{production,staging}.toml` の `[vars]` に直接 commit する (公開ドメインでありシークレットではない)。
+
+**fail-closed**: 非 development で `ALLOWED_ORIGINS` が空 / 不一致なら拒否する。以前は未設定時に任意 Origin を reflect する fail-open だったが、staging/production の config に値を commit したため廃止した。**新しい環境を追加するときは `ALLOWED_ORIGINS` の設定が必須** (未設定だとフロントから API を読めない)。
+
+**editor と verify は同一 Pages プロジェクト** (`editor=/`, `verify=/verify`) にデプロイされるため origin は環境ごとに 1 つ。実際の設定:
+
+| 環境 | Worker | `ALLOWED_ORIGINS` | 理由 |
+|---|---|---|---|
+| production | `typedcode-api` | `https://typedcode.dev,https://typedcode.pages.dev` | カスタムドメイン + 既定 pages.dev |
+| staging | `typedcode-api-staging` | `https://*.typedcode.pages.dev` | develop デプロイ + PR プレビュー (`<branch>.typedcode.pages.dev`) を許可 |
+| dev (local) | (local) | 未設定 | `ENVIRONMENT=development` で localhost 自動許可 |
+
+`*.domain` wildcard は **1 段以上のサブドメインを要求** し (apex は含めない)、先頭リテラルドット要求で `https://eviltypedcode.pages.dev` のような prefix 偽装を弾く。`*.pages.dev` のように広げると他人の Pages サイトまで通るので**自プロジェクト配下に限定**すること (`<branch>.<project>.pages.dev` は自プロジェクトの branch alias に限られる)。新しいカスタムドメイン (例: `www.`) を足すときは production の `ALLOWED_ORIGINS` に追記する。
+
+**CORS の限界と濫用防止**: CORS はブラウザのクロスオリジン**読み取り**のみを制限し、サーバ間アクセス (curl 等) は防げない。`/api/checkpoint/sign` は「任意 content への serverTimestamp 付き署名」を返すだけで、それ自体は何の権限も与えない (署名は『この内容がこのサーバ時刻に提示された』ことしか証明しない)。署名 API の濫用に対する実際の防御線は:
+
+- **per-session 上限**: `SESSION_MAX_CHECKPOINTS` (50,000) と `SESSION_TTL_SECONDS` (7 日)
+- **入力サイズ上限**: `MAX_BODY_BYTES` (8KB) + スキーマ厳格化 (64-hex / 最大長)
+- **IP / グローバル rate limit**: Cloudflare の WAF / Rate Limiting Rules に委譲 (Worker コード外。必要に応じてダッシュボードで設定)
 
 ## KV ネームスペース
 
 | Binding | 内容 | TTL |
 |---|---|---|
 | `CHECKPOINT_SESSIONS` | `firstSeenAt`, `lastCheckpointIndex`, `lastServerTimestamp`, `signedCount`, `lastEnvelope` (冪等用) | 7 日 |
+
+## 観測性・シークレット宣言・型 (運用)
+
+`wrangler.{staging,production}.toml` に以下を宣言している (dev の `wrangler.toml` は skip-worktree なので対象外):
+
+- **`[observability] enabled = true`**: Workers Logs を有効化。`head_sampling_rate = 1` は低トラフィックな署名 API 向けに全リクエスト記録。トラフィックが増えたら下げる。
+- **`[secrets] required = [...]`**: `TURNSTILE_SECRET_KEY` / `ATTESTATION_SECRET_KEY` / `CHECKPOINT_SIGNING_KEY_ID` / `CHECKPOINT_SIGNING_KEY_JWK` を必須宣言。`wrangler secret put` 漏れがあると **deploy 時にエラー**になり、設定漏れによる本番事故を防ぐ。`--dry-run` (CI の config 検証) では secret の存在チェックは走らない。
+
+**Env の型**: 現状 `src/index.ts` の `Env` / `checkpoint.ts` の `CheckpointEnv` は手書き。`npm run cf-typegen` (= `wrangler types`) で config から `worker-configuration.d.ts` を生成できる (gitignore 済み・commit しない)。生成された runtime types へ完全移行 (= `@cloudflare/workers-types` を外し tsconfig を更新、手書き `Env` を撤去) は**別途の follow-up**。今は手書き `Env` が source of truth なので、binding を増やしたら手書き側も更新すること。
 
 ## ローカル開発のフロー
 
@@ -89,19 +129,23 @@ src/
 GitHub repo の Settings → Environments に **2 つの環境** を作成:
 
 **Repo level (Settings → Secrets and variables → Actions)**
-- `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_PROJECT_NAME`
-  (環境共通の Cloudflare 認証情報)
+- `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_PROJECT_NAME` (環境共通)
+- **`CLOUDFLARE_API_TOKEN` は repo level に置かない** — 後述の通り Environment ごとに分ける (preview/staging で本番デプロイ権限の token を露出させない)
 
-**Environment `staging`** (承認なし、自動デプロイ)
+**Environment `staging`** (承認なし、自動デプロイ。preview もこの環境)
 - Secrets:
+  - `CLOUDFLARE_API_TOKEN` — **staging/preview 専用** (Pages:Edit + staging Worker のみ。本番 Worker 権限なし)
   - `VITE_API_URL` — staging Workers の URL (ビルド時に bundle に baked-in)
   - `VITE_TURNSTILE_SITE_KEY` — staging 用 Turnstile site key
 
 **Environment `production`** (Required reviewers 設定推奨 = 承認待ち)
 - Secrets:
+  - `CLOUDFLARE_API_TOKEN` — **本番専用** (承認ゲート配下なので Approve を経ないと使われない)
   - `VITE_API_URL` — 本番 Workers の URL
   - `VITE_TURNSTILE_SITE_KEY` — 本番 Turnstile site key
 - **Protection rule**: Required reviewers に 1 名以上 (自分でもよい) → main push 時に Actions タブで手動承認が必要になる
+
+> deploy job は全て `environment:` を宣言済みなので、Environment secret は同名 repo secret を**自動上書き**する。ワークフロー変更は不要。
 
 (KV namespace ID は wrangler.{staging,production}.toml に直接 commit するので環境 secret には入れない)
 

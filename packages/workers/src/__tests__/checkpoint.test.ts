@@ -226,6 +226,29 @@ describe('handleSignCheckpoint', () => {
     expect(body.code).toBe('SCHEMA_INVALID');
   });
 
+  it('returns SCHEMA_INVALID for a non-hex chainHash', async () => {
+    const res = await handleSignCheckpoint(
+      makeRequest(makeInput({ chainHash: 'not-a-valid-sha256' })),
+      env,
+      responder
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrorResponseBody;
+    expect(body.code).toBe('SCHEMA_INVALID');
+  });
+
+  it('returns SCHEMA_INVALID when Content-Length exceeds the body size limit', async () => {
+    const req = new Request('https://workers.test/api/checkpoint/sign', {
+      method: 'POST',
+      body: JSON.stringify(makeInput()),
+      headers: { 'Content-Type': 'application/json', 'Content-Length': String(8 * 1024 + 1) },
+    });
+    const res = await handleSignCheckpoint(req, env, responder);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrorResponseBody;
+    expect(body.code).toBe('SCHEMA_INVALID');
+  });
+
   it('returns SESSION_LIMIT_EXCEEDED when signedCount is at cap', async () => {
     // signedCount を上限に達した状態で事前注入
     kv.store.set(
@@ -247,13 +270,39 @@ describe('handleSignCheckpoint', () => {
     expect(body.code).toBe('SESSION_LIMIT_EXCEEDED');
   });
 
-  it('still returns envelope when KV write fails (graceful degradation)', async () => {
+  it('rejects with SESSION_PERSIST_FAILED when the FIRST KV write fails', async () => {
+    // 初回 checkpoint の KV 書き込み失敗は致命的: firstSeenAt が固定されないまま
+    // envelope を返すと、次回リクエストで別の firstSeenAt が確定し proof 全体が
+    // 無効化される。よって署名済み envelope は返さずクライアントにリトライさせる。
     kv.failNextPut = true;
     const res = await handleSignCheckpoint(makeRequest(makeInput()), env, responder);
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as SignResponseBody;
-    expect(body.envelope.signature).toMatch(/^[0-9a-f]+$/);
-    // KV 書き込みは失敗したので状態は無い
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as ErrorResponseBody;
+    expect(body.code).toBe('SESSION_PERSIST_FAILED');
+    // 状態は永続化されていない
     expect(kv.store.has('session:test-session')).toBe(false);
+  });
+
+  it('still returns envelope when a LATER KV write fails (firstSeenAt already locked)', async () => {
+    // 初回は成功させて firstSeenAt を KV に固定する
+    const res1 = await handleSignCheckpoint(
+      makeRequest(makeInput({ checkpointIndex: 0 })),
+      env,
+      responder
+    );
+    expect(res1.status).toBe(200);
+    expect(kv.store.has('session:test-session')).toBe(true);
+
+    // 2 回目の書き込みだけ失敗させる。firstSeenAt は既に固定済みなので
+    // best-effort で envelope を返してよい (graceful degradation)。
+    kv.failNextPut = true;
+    const res2 = await handleSignCheckpoint(
+      makeRequest(makeInput({ checkpointIndex: 1, previousSignedCheckpointHash: 'e'.repeat(64) })),
+      env,
+      responder
+    );
+    expect(res2.status).toBe(200);
+    const body = (await res2.json()) as SignResponseBody;
+    expect(body.envelope.signature).toMatch(/^[0-9a-f]+$/);
   });
 });

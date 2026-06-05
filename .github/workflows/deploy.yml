@@ -6,9 +6,19 @@ on:
   pull_request:
     branches: [main, develop]
 
+# ref ごとに 1 run。PR は新しい push で古い run をキャンセル (CI 節約)。
+# push (= deploy) はキャンセルせずキューイングし、最新 run が最後に走るので
+# 「古い deploy が後から完了して新しい成果物を上書きする」競合を防ぐ。
+# 本番デプロイを途中キャンセルしないため cancel-in-progress は PR のみ true。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # 構成:
-#   test                   — どのトリガでも必ず走る (tsc + テスト)
-#   deploy-preview         — PR で Pages のプレビュー URL を発行 (Workers staging 向け)
+#   test                   — どのトリガでも必ず走る (shared / workers のユニットテスト)
+#   check                  — どのトリガでも必ず走る (全 package typecheck/build + Worker config dry-run)
+#   deploy-preview         — feature → develop PR で Pages のプレビュー URL を発行 (Workers staging 向け)
+#   comment-staging-preview— develop → main PR に staging URL をコメント (新規 preview は作らない)
 #   deploy-staging         — develop push で Workers staging + Pages staging を更新
 #   deploy-production      — main  push で Workers production + Pages production を更新
 #                            (GitHub Environment "production" の Required reviewers で承認待ち)
@@ -42,11 +52,44 @@ jobs:
         run: npm run test:run -w @typedcode/workers
 
   # --------------------------------------------------------------------
+  # 品質ゲート (merge 前に全 package を typecheck/build + Worker config 検証)
+  # build は従来 deploy job で初めて走っていたため、main/develop に入ってから
+  # 失敗する余地があった。push/PR どちらでも走らせ deploy の前提条件にする。
+  # secrets 不要 (VITE_* 無しでも build は通る / wrangler は --dry-run)。
+  # --------------------------------------------------------------------
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --include=optional
+
+      - name: Typecheck (all packages)
+        run: npm run typecheck
+
+      - name: Build (all packages)
+        run: npm run build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Validate Worker config (staging dry-run)
+        run: npm run deploy:staging -w @typedcode/workers -- --dry-run --outdir /tmp/wrangler-dryrun-staging
+
+      - name: Validate Worker config (production dry-run)
+        run: npm run deploy:production -w @typedcode/workers -- --dry-run --outdir /tmp/wrangler-dryrun-production
+
+  # --------------------------------------------------------------------
   # PR: Pages プレビューデプロイ (Workers は触らない)
   # PR ビルドは staging API を指す。
   # --------------------------------------------------------------------
   deploy-preview:
-    needs: test
+    needs: [test, check]
     # head_ref != 'develop' で `develop → main` の PR (= PR #60 など) を除外する。
     # この種類の PR では develop push 起因の deploy-staging が `develop.<project>.pages.dev`
     # にデプロイするのと URL が衝突するため、PR 側の preview は走らせない。
@@ -144,11 +187,62 @@ jobs:
             }
 
   # --------------------------------------------------------------------
+  # develop → main PR: 新規プレビューは作らない (develop push の deploy-staging が
+  # develop.<project>.pages.dev に出すのと URL が衝突するため)。代わりに、その
+  # staging URL を PR にコメントする。本番昇格前に確認すべき成果物がこれ。
+  # --------------------------------------------------------------------
+  comment-staging-preview:
+    needs: [test, check]
+    if: github.event_name == 'pull_request' && github.head_ref == 'develop' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment staging preview URL on the PR
+        uses: actions/github-script@v9
+        env:
+          PROJECT_NAME: ${{ secrets.CLOUDFLARE_PROJECT_NAME }}
+        with:
+          script: |
+            const url = `https://develop.${process.env.PROJECT_NAME}.pages.dev`;
+            const marker = '## 🔍 Staging Preview (develop → main)';
+            const body = `${marker}
+
+            | Name | URL |
+            |------|-----|
+            | Staging | ${url} |
+
+            この PR は develop を main に昇格します。develop の最新ビルドは常時この staging URL にデプロイされています (API: **staging** Workers)。本番デプロイ前の動作確認はここで行ってください。
+            *Promotion candidate: ${context.sha.substring(0, 7)}*`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const botComment = comments.find(c => c.user.type === 'Bot' && c.body.includes(marker));
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  # --------------------------------------------------------------------
   # develop push: staging 環境 (Workers + Pages) を更新
   # 自動デプロイ。承認ゲートなし。
   # --------------------------------------------------------------------
   deploy-staging:
-    needs: test
+    needs: [test, check]
     if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment:
@@ -203,7 +297,7 @@ jobs:
   # GitHub Environment "production" の Required reviewers で承認待ち。
   # --------------------------------------------------------------------
   deploy-production:
-    needs: test
+    needs: [test, check]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment:
