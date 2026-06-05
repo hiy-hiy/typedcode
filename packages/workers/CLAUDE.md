@@ -59,14 +59,15 @@ src/
 
 CORS は `ALLOWED_ORIGINS` (env var, カンマ区切り) による**許可リスト方式**で実装する (`src/index.ts` の `resolveCorsOrigin`)。
 
-許可判定の優先順位:
+許可判定の優先順位 (**fail-closed**):
 
 1. `ALLOWED_ORIGINS` に一致 (**完全一致** or `https://*.domain` の**サブドメイン wildcard**) → その Origin を reflect
 2. `ENVIRONMENT === 'development'` のとき `localhost` / `127.0.0.1` → 自動許可 (DX)
-3. `ALLOWED_ORIGINS` **未設定** → 後方互換で reflect (デプロイ破壊回避)。**production / staging では必ず設定すること**
-4. それ以外 → `Access-Control-Allow-Origin` を**付与しない** (ブラウザのクロスオリジン読み取りを拒否)
+3. それ以外 → `Access-Control-Allow-Origin` を**付与しない** (ブラウザのクロスオリジン読み取りを拒否)
 
 ワイルドカード `*` は一切返さない (Origin 不在のリクエストにはヘッダ自体を付けない)。許可オリジンは `wrangler.{production,staging}.toml` の `[vars]` に直接 commit する (公開ドメインでありシークレットではない)。
+
+**fail-closed**: 非 development で `ALLOWED_ORIGINS` が空 / 不一致なら拒否する。以前は未設定時に任意 Origin を reflect する fail-open だったが、staging/production の config に値を commit したため廃止した。**新しい環境を追加するときは `ALLOWED_ORIGINS` の設定が必須** (未設定だとフロントから API を読めない)。
 
 **editor と verify は同一 Pages プロジェクト** (`editor=/`, `verify=/verify`) にデプロイされるため origin は環境ごとに 1 つ。実際の設定:
 
