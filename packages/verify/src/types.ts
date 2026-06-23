@@ -50,7 +50,7 @@ export interface IntegratedTimelineCache {
 export type VerificationStatus = 'pending' | 'verifying' | 'success' | 'warning' | 'error';
 
 /** 検証モード */
-export type VerificationMode = 'fast' | 'audit' | 'full';
+export type VerificationMode = 'quick' | 'fast' | 'audit' | 'full';
 
 /** PoSW の検証モード */
 export type PoswMode = 'skipped' | 'sampled' | 'full';
@@ -96,6 +96,8 @@ export interface VerificationResultData {
   // 検証モード (Phase 2 で worker から設定される)
   verificationMode?: VerificationMode;
   poswMode?: PoswMode;
+  /** quick モードでハッシュチェーン検証をスキップしたかどうか */
+  chainSkipped?: boolean;
   // Signed checkpoint 検証結果 (Phase 1.5)
   signedCheckpointValid?: boolean;
   signedCheckpointCoverage?: SignedCheckpointsVerificationResult['coverage'];

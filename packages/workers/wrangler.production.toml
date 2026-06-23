@@ -44,4 +44,4 @@ required = [
 
 [[kv_namespaces]]
 binding = "CHECKPOINT_SESSIONS"
-id = "dbc5d23dd68442379d5ed613494ede6a"
+id = "f81ede8c436f4b0da33af0aad2b7ca58"

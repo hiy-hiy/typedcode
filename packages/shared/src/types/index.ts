@@ -115,6 +115,8 @@ export type {
   TypingPatternRawStats,
   TypingPatternAnalysis,
   TypingPatternAnalyzerConfig,
+  MotorConsistencyData,
+  DigraphStats,
 } from './typingPattern.js';
 export { DEFAULT_TYPING_PATTERN_ANALYZER_CONFIG } from './typingPattern.js';
 

@@ -18,6 +18,7 @@ import type {
   PatternJudgment,
 } from '../types/index.js';
 import { DEFAULT_TYPING_PATTERN_ANALYZER_CONFIG } from '../types/typingPattern.js';
+import { MotorConsistencyExtractor } from './MotorConsistencyExtractor.js';
 
 // ============================================================================
 // TypingPatternAnalyzer クラス
@@ -127,6 +128,10 @@ export class TypingPatternAnalyzer {
     const totalTypingTime =
       events.length >= 2 && firstEvent && lastEvent ? lastEvent.timestamp - firstEvent.timestamp : 0;
 
+    // 運動学的整合性の基礎データを抽出
+    const motorConsistencyExtractor = new MotorConsistencyExtractor();
+    const motorConsistency = motorConsistencyExtractor.extract(events);
+
     return {
       dwellTimes,
       flightTimes,
@@ -137,6 +142,7 @@ export class TypingPatternAnalyzer {
       keySpecificDwellTimes,
       totalEvents: events.length,
       totalTypingTime,
+      motorConsistency,
     };
   }
 

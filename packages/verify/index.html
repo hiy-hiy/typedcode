@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja" data-theme="dark">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -25,6 +26,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
 </head>
+
 <body>
   <div id="app">
     <!-- Main Layout -->
@@ -302,7 +304,8 @@
                       <i class="fas fa-spinner fa-spin"></i>
                     </div>
                     <div class="result-status-info">
-                      <div class="result-status-title" id="result-status-title" data-i18n="result.statusVerifying">検証中...</div>
+                      <div class="result-status-title" id="result-status-title" data-i18n="result.statusVerifying">
+                        検証中...</div>
                       <div class="result-status-filename" id="result-status-filename"></div>
                     </div>
                   </div>
@@ -396,7 +399,8 @@
                             <span class="chain-error-value chain-error-hash" id="chain-error-computed">-</span>
                           </div>
                           <div class="chain-error-row" id="chain-error-timestamp-row" style="display: none;">
-                            <span class="chain-error-label" data-i18n="chain.errorDetails.timestampDetail">タイムスタンプ</span>
+                            <span class="chain-error-label"
+                              data-i18n="chain.errorDetails.timestampDetail">タイムスタンプ</span>
                             <span class="chain-error-value" id="chain-error-timestamp">-</span>
                           </div>
                         </div>
@@ -574,7 +578,8 @@
                     </button>
                     <!-- Event Filter -->
                     <div class="chart-event-selector-container" id="chart-event-selector-container">
-                      <button class="chart-event-selector-btn" id="chart-event-selector-btn" data-i18n-title="charts.eventFilter">
+                      <button class="chart-event-selector-btn" id="chart-event-selector-btn"
+                        data-i18n-title="charts.eventFilter">
                         <i class="fas fa-filter"></i>
                       </button>
                       <div class="chart-event-selector-dropdown" id="chart-event-selector-dropdown"></div>
@@ -600,7 +605,8 @@
                   <div class="chart-stats" id="chart-stats">
                     <span><span data-i18n="charts.keys">キー</span>: <strong id="keydown-count">0</strong></span>
                     <span><span data-i18n="charts.dwell">Dwell</span>: <strong id="avg-dwell-time">0ms</strong></span>
-                    <span><span data-i18n="charts.flight">Flight</span>: <strong id="avg-flight-time">0ms</strong></span>
+                    <span><span data-i18n="charts.flight">Flight</span>: <strong
+                        id="avg-flight-time">0ms</strong></span>
                     <span><span data-i18n="charts.mouse">マウス</span>: <strong id="mouse-event-count">0</strong></span>
                   </div>
                   <!-- Integrated Seekbar -->
@@ -624,7 +630,8 @@
                     </div>
                     <div class="seekbar-track-container">
                       <div class="seek-track">
-                        <input type="range" class="seek-slider" id="seekbar-slider" min="0" max="100" value="100" step="1">
+                        <input type="range" class="seek-slider" id="seekbar-slider" min="0" max="100" value="100"
+                          step="1">
                         <div class="seek-progress" id="seekbar-progress"></div>
                       </div>
                     </div>
@@ -686,4 +693,5 @@
 
   <script type="module" src="/src/main.ts"></script>
 </body>
+
 </html>

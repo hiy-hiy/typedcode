@@ -159,6 +159,7 @@ function calculatePoSWStats(events: StoredEvent[]): VerificationResultData['posw
 
 function poswModeFor(mode: VerificationMode): PoswMode {
   switch (mode) {
+    case 'quick':
     case 'fast':
       return 'skipped';
     case 'audit':
@@ -176,7 +177,8 @@ function poswModeFor(mode: VerificationMode): PoswMode {
 async function verify(request: VerifyRequest): Promise<void> {
   const { id, proofData } = request;
   const mode: VerificationMode = request.mode ?? 'full';
-  const skipPosw = mode === 'fast';
+  const skipPosw = mode === 'fast' || mode === 'quick';
+  const skipChain = mode === 'quick';
 
   try {
     const typingProof = new TypingProof();
@@ -227,6 +229,61 @@ async function verify(request: VerifyRequest): Promise<void> {
     // 2. ハッシュ鎖の検証
     if (!proofData.proof?.events) {
       sendError(id, 'No events found in proof data');
+      return;
+    }
+
+    // quick モード: ハッシュチェーン検証を完全にスキップ
+    if (skipChain) {
+      sendProgress(id, 3, 3, 'complete', totalEvents);
+
+      // コンテンツ再生検証だけは軽量なので実行
+      const contentVerification = verifyContentReplay(
+        proofData.proof.events,
+        proofData.content ?? ''
+      );
+
+      // Signed checkpoint 検証 (quick でも実行 — 軽量)
+      let signedCheckpointResult: SignedCheckpointsVerificationResult | undefined;
+      try {
+        const narrowedForSigned = proofData as unknown as ExportedProof;
+        signedCheckpointResult = await verifyProofSignedCheckpoints(narrowedForSigned);
+      } catch (err) {
+        signedCheckpointResult = {
+          valid: false,
+          anchored: false,
+          details: [],
+          coverage: { signedCount: 0, lastSignedEventIndex: null, coverageRatio: 0 },
+          temporal: null,
+          reason: `Signed checkpoint verification threw: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+
+      const poswStats = calculatePoSWStats(proofData.proof.events);
+      const signedCheckpointReport = buildSignedCheckpointReport(
+        proofData.checkpoints ?? [],
+        signedCheckpointResult
+      );
+
+      sendResult(id, {
+        metadataValid,
+        rootValid,
+        // チェーン検証をスキップしたので chainValid はメタデータとコンテンツ整合性のみで判定
+        chainValid: metadataValid && contentVerification.valid,
+        contentValid: contentVerification.valid,
+        isPureTyping,
+        message: 'Hash chain verification skipped (quick mode)',
+        totalEvents,
+        poswStats,
+        verificationMode: mode,
+        poswMode: poswModeFor(mode),
+        chainSkipped: true,
+        signedCheckpointValid: signedCheckpointResult.anchored ? signedCheckpointResult.valid : undefined,
+        signedCheckpointAnchored: signedCheckpointResult.anchored,
+        signedCheckpointCoverage: signedCheckpointResult.coverage,
+        signedCheckpointTemporal: signedCheckpointResult.temporal,
+        signedCheckpointReason: signedCheckpointResult.reason,
+        signedCheckpointReport,
+      });
       return;
     }
 

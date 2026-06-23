@@ -2,7 +2,8 @@
 .result-container {
   display: flex;
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -13,7 +14,8 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   gap: 16px;
 }
 
@@ -35,7 +37,8 @@
 .result-content {
   display: flex;
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -46,6 +49,7 @@
   width: 50%;
   min-width: 350px;
   max-width: 70%;
+  height: 100%;
   padding: 16px;
   overflow-y: auto;
   flex-shrink: 0;

@@ -372,3 +372,119 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Motor Consistency Section */
+.motor-consistency-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.motor-consistency-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.motor-consistency-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.motor-table-container {
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.motor-table-title {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.motor-table-title.success {
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--success);
+}
+
+.motor-table-title.error {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--error);
+}
+
+.motor-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+.motor-table th,
+.motor-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.motor-table tr:last-child td {
+  border-bottom: none;
+}
+
+.motor-table th {
+  color: var(--text-tertiary);
+  font-weight: 500;
+  background: var(--bg-tertiary);
+}
+
+.motor-digraph {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+
+.motor-time {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.motor-dist {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.motor-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.motor-tag {
+  display: inline-block;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.motor-tag.success {
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--success);
+}
+
+.motor-tag.warning {
+  background: rgba(251, 191, 36, 0.1);
+  color: var(--warning);
+}
+
+.motor-tag.error {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--error);
+}
