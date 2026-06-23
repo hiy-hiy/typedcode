@@ -102,7 +102,9 @@ export function buildResultData(tabState: VerifyTabState): ResultData | null {
     pureTyping: verificationResult.isPureTyping,
     pasteCount,
     internalPasteCount,
-    verificationMethod: verificationResult.sampledResult ? 'sampled' : 'full',
+    verificationMethod: verificationResult.chainSkipped
+      ? 'skipped'
+      : verificationResult.sampledResult ? 'sampled' : 'full',
     chainErrorDetails,
     sampledVerification,
   };

@@ -88,6 +88,7 @@ export interface VerifyTranslationKeys {
     posw: string;
     poswMode: string;
     poswSkipped: string;
+    poswSkippedQuick: string;
     poswSampled: string;
     poswFull: string;
     poswNone: string;
@@ -328,6 +329,22 @@ export interface VerifyTranslationKeys {
     charTiming: {
       normal: string;
       tooUniform: string;
+    };
+    motor: {
+      title: string;
+      highVariance: string;
+      lowVariance: string;
+      keys: string;
+      avgTime: string;
+      dist: string;
+      features: string;
+      sameHand: string;
+      altHand: string;
+      anyHand: string;
+      sameFinger: string;
+      diffFinger: string;
+      rowChange: string;
+      sameRow: string;
     };
   };
 

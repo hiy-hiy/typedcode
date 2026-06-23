@@ -9,6 +9,8 @@ import {
   type MetricKey,
   type TypingPatternIssue,
   type PatternJudgment,
+  type MotorConsistencyData,
+  type DigraphStats,
 } from '@typedcode/shared';
 import { t } from '../i18n/index.js';
 
@@ -95,6 +97,7 @@ export class TypingPatternCard {
         </button>
         <div class="pattern-metrics ${this.isExpanded ? 'expanded' : ''}" id="pattern-metrics">
           ${this.renderMetrics(analysis.metrics)}
+          ${analysis.rawStats.motorConsistency ? this.renderMotorConsistency(analysis.rawStats.motorConsistency) : ''}
         </div>
       </div>
     `;
@@ -233,6 +236,89 @@ export class TypingPatternCard {
       characterSpecificTiming: 'キーの位置による入力時間の違いを分析。人間は小指キーが遅く、ホームポジションが速いなどの特徴を示す。',
     };
     return descriptions[key] || '';
+  }
+
+  /**
+   * 運動学的整合性 (Motor Consistency) サンプルをレンダリング
+   */
+  private renderMotorConsistency(motorData: MotorConsistencyData): string {
+    const statsArray = Object.values(motorData.digraphStats)
+      // ある程度サンプルがあるもの（3回以上）を対象
+      .filter((s) => s.count >= 3)
+      .sort((a, b) => b.stdFlightTime - a.stdFlightTime);
+
+    if (statsArray.length === 0) {
+      return '';
+    }
+
+    const highVariance = statsArray.slice(0, 5);
+    const lowVariance = statsArray.slice(-5).reverse(); // 一番誤差が小さいものを先頭に
+
+    return `
+      <div class="motor-consistency-section">
+        <h4 class="motor-consistency-title">
+          <i class="fas fa-keyboard"></i> ${t('pattern.motor.title')}
+        </h4>
+        <div class="motor-consistency-grid">
+          <div class="motor-table-container">
+            <div class="motor-table-title error">${t('pattern.motor.highVariance')}</div>
+            ${this.renderMotorTable(highVariance)}
+          </div>
+          <div class="motor-table-container">
+            <div class="motor-table-title success">${t('pattern.motor.lowVariance')}</div>
+            ${this.renderMotorTable(lowVariance)}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderMotorTable(stats: DigraphStats[]): string {
+    const rows = stats.map((s) => {
+      const f = s.features;
+      
+      let handStr = '';
+      let handClass = '';
+      if (f.hand1 === 'both' || f.hand2 === 'both') {
+        handStr = t('pattern.motor.anyHand') || 'Any Hand';
+        handClass = 'success'; // 中立的な色として
+      } else {
+        handStr = f.isSameHand ? t('pattern.motor.sameHand') : t('pattern.motor.altHand');
+        handClass = f.isSameHand ? 'warning' : 'success';
+      }
+
+      const fingerStr = f.isSameFinger ? t('pattern.motor.sameFinger') : t('pattern.motor.diffFinger');
+      const rowStr = f.hasRowChange ? t('pattern.motor.rowChange') : t('pattern.motor.sameRow');
+      
+      return `
+        <tr>
+          <td class="motor-digraph">"${escapeHtml(s.digraph)}"</td>
+          <td class="motor-time">${s.minFlightTime.toFixed(0)} - ${s.maxFlightTime.toFixed(0)} ms</td>
+          <td class="motor-dist">${f.distance.toFixed(1)}</td>
+          <td class="motor-tags">
+            <span class="motor-tag ${handClass}">${handStr}</span>
+            <span class="motor-tag ${f.isSameFinger ? 'error' : 'success'}">${fingerStr}</span>
+            <span class="motor-tag ${f.hasRowChange ? 'warning' : 'success'}">${rowStr}</span>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <table class="motor-table">
+        <thead>
+          <tr>
+            <th>${t('pattern.motor.keys')}</th>
+            <th>${t('pattern.motor.avgTime')}</th>
+            <th>${t('pattern.motor.dist')}</th>
+            <th>${t('pattern.motor.features')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+    `;
   }
 
   /**

@@ -6,7 +6,7 @@ import { FileSystemAccessService } from '../services/FileSystemAccessService.js'
 import { getI18n } from '../i18n/index.js';
 import type { VerificationMode } from '../types';
 
-const VERIFY_MODE_CYCLE: VerificationMode[] = ['fast', 'audit', 'full'];
+const VERIFY_MODE_CYCLE: VerificationMode[] = ['quick', 'fast', 'audit', 'full'];
 
 export class ActivityBar {
   private mainMenuBtn: HTMLElement;

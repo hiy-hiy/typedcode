@@ -90,6 +90,8 @@ export interface TypingPatternRawStats {
   totalEvents: number;
   /** 総タイピング時間 (ms) */
   totalTypingTime: number;
+  /** 運動学的整合性の基礎データ (Motor Consistency) */
+  motorConsistency?: MotorConsistencyData;
 }
 
 // ============================================================================
@@ -114,6 +116,84 @@ export interface TypingPatternAnalysis {
   issues: TypingPatternIssue[];
   /** 生データ統計 */
   rawStats: TypingPatternRawStats;
+}
+
+// ============================================================================
+// 運動学的整合性 (Motor Consistency)
+// ============================================================================
+
+/** キーの物理位置情報 */
+export interface KeyPosition {
+  row: number; // 行 (0: 数字行, 1: QWERTY行, 2: ASDF行, 3: ZXCV行, 4: Space行)
+  col: number; // 列 (各行の左端を0とする実数座標、行のズレを含む)
+  hand: 'left' | 'right' | 'both' | 'unknown'; // 担当する手
+  finger: 'thumb' | 'index' | 'middle' | 'ring' | 'pinky' | 'unknown'; // 担当する指
+}
+
+/** Digraph（連続2キー）の物理特徴量 */
+export interface DigraphPhysicalFeatures {
+  /** 物理的な距離（キー単位のユークリッド距離など） */
+  distance: number;
+  /** 同じ手かどうか */
+  isSameHand: boolean;
+  /** 同じ指かどうか */
+  isSameFinger: boolean;
+  /** 行の移動があるか（row1 !== row2） */
+  hasRowChange: boolean;
+  /** 1文字目の手 */
+  hand1: 'left' | 'right' | 'both' | 'unknown';
+  /** 2文字目の手 */
+  hand2: 'left' | 'right' | 'both' | 'unknown';
+}
+
+/** Digraphの観測データセット（1回の打鍵） */
+export interface DigraphObservation {
+  digraph: string; // 例: "th"
+  flightTime: number; // ms
+  features: DigraphPhysicalFeatures; // 物理特徴
+}
+
+/** Digraphの統計集計結果 */
+export interface DigraphStats {
+  digraph: string;
+  count: number;
+  meanFlightTime: number;
+  medianFlightTime: number;
+  stdFlightTime: number;
+  minFlightTime: number;
+  maxFlightTime: number;
+  features: DigraphPhysicalFeatures; // このDigraphの固定特徴量
+}
+
+/** Trigraphの観測データ */
+export interface TrigraphObservation {
+  trigraph: string; // 例: "the"
+  flightTime1: number; // 1文字目から2文字目
+  flightTime2: number; // 2文字目から3文字目
+  totalFlightTime: number; // 1文字目から3文字目
+}
+
+/** Trigraphの統計集計結果 */
+export interface TrigraphStats {
+  trigraph: string;
+  count: number;
+  meanTotalFlightTime: number;
+  medianTotalFlightTime: number;
+  stdTotalFlightTime: number;
+  minTotalFlightTime: number;
+  maxTotalFlightTime: number;
+}
+
+/** 運動学的整合性の基礎データ */
+export interface MotorConsistencyData {
+  /** 全Digraphの観測データ一覧（回帰モデルへの投入用） */
+  digraphObservations: DigraphObservation[];
+  /** 各Digraphの統計集計 */
+  digraphStats: Record<string, DigraphStats>;
+  /** 全Trigraphの観測データ一覧 */
+  trigraphObservations: TrigraphObservation[];
+  /** 各Trigraphの統計集計 */
+  trigraphStats: Record<string, TrigraphStats>;
 }
 
 // ============================================================================

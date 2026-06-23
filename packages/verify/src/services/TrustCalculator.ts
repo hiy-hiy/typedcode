@@ -50,7 +50,14 @@ export class TrustCalculator {
     }
 
     // 2. ハッシュチェーン検証
-    if (verificationResult && !verificationResult.chainValid) {
+    if (verificationResult?.chainSkipped) {
+      // quick モード: スキップは意図的なので warning 扱い
+      issues.push({
+        component: 'chain',
+        severity: 'warning',
+        message: 'ハッシュチェーン検証スキップ (quick モード)',
+      });
+    } else if (verificationResult && !verificationResult.chainValid) {
       issues.push({
         component: 'chain',
         severity: 'error',

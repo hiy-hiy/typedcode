@@ -499,12 +499,19 @@ export class ResultPanel {
     this.externalInput.textContent = result.pureTyping ? 'なし' : 'あり';
 
     // Chain card
-    this.renderCard(
-      this.chainIcon,
-      this.chainBadge,
-      result.chainValid,
-      result.chainValid ? '有効' : '無効'
-    );
+    if (result.verificationMethod === 'skipped') {
+      // quick モード: チェーン検証スキップ時は warning 表示
+      this.chainIcon.className = 'result-card-icon warning';
+      this.chainBadge.className = 'result-card-badge warning';
+      this.chainBadge.textContent = 'スキップ';
+    } else {
+      this.renderCard(
+        this.chainIcon,
+        this.chainBadge,
+        result.chainValid,
+        result.chainValid ? '有効' : '無効'
+      );
+    }
     this.chainMethod.textContent = result.verificationMethod || 'standard';
     this.chainEvents.textContent = `${eventCount.toLocaleString()}件`;
 
@@ -520,7 +527,7 @@ export class ResultPanel {
     const poswBadgeText = !hasPoSW
       ? t('result.poswNone')
       : poswMode === 'skipped'
-        ? t('result.poswSkipped')
+        ? data.verificationMode === 'quick' ? t('result.poswSkippedQuick') : t('result.poswSkipped')
         : poswMode === 'sampled'
           ? t('result.poswSampled')
           : t('result.poswFull');
