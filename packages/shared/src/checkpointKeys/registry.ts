@@ -72,6 +72,34 @@ export const CHECKPOINT_PUBLIC_KEYS: readonly CheckpointPublicKey[] = [
     },
     status: "active",
     validFrom: "2026-06-04T16:09:16.485Z"
+  },
+  {
+    keyId: "tcp-202606-702bc6",
+    algorithm: "ECDSA-P256",
+    publicKeyJwk: {
+      key_ops: ["verify"],
+      ext: true,
+      kty: "EC",
+      x: "9lgrVHXTfNRTEgrJy4996aRxs6gtluYd3axx7F8JCM0",
+      y: "XtpLpuRQfSOfpkynGurI6Sy-ElQrBBp0P1Qn6LNJDfg",
+      crv: "P-256"
+    },
+    status: "active",
+    validFrom: "2026-06-23T05:54:58.143Z"
+  },
+  {
+    keyId: "tcp-202606-999644",
+    algorithm: "ECDSA-P256",
+    publicKeyJwk: {
+      key_ops: ["verify"],
+      ext: true,
+      kty: "EC",
+      x: "8gO9gfKzroq9NQec-fblfj8yuK8cTRtSBtxDjQiAzZE",
+      y: "2uKIfEUq5iIB_kq80zZ8ZBu1AW2sJz8CooAPP7gexcM",
+      crv: "P-256"
+    },
+    status: "active",
+    validFrom: "2026-06-23T05:54:58.280Z"
   }
 ] as const;
 
